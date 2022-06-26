@@ -1,5 +1,5 @@
 [package]
-name = "FactCalculator"
+name = "fact_calculator_rust"
 version = "0.1.0"
 edition = "2021"
 
