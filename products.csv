@@ -1,5 +1,5 @@
 green_circuit,1.3,1,copper_wire:3,stone_plate:1
-copper_wire,0.25,2,copper_plate:1
+copper_wire,0.5,2,copper_plate:1
 stone_plate,0.125,1
 small_electric_motor,0.8,1,copper_wire:6,iron_gear_wheel:1,iron_plate:1
 iron_gear_wheel,0.5,1,iron_plate:2
