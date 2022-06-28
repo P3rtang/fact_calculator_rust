@@ -1,7 +1,20 @@
+#![allow(non_snake_case)]
 use std::{fs, io, fmt::{Formatter, Display, Result}};
 use std::collections::HashMap;
 use std::io::Write;
+#[allow(dead_code)]
 
+enum Command {
+    Help,
+    Calc,
+    List,
+}
+
+impl Display for Command {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        write!(f, "Help\nCalc\nList")
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Product {
@@ -162,26 +175,30 @@ fn parse_input(data: &ProductList) -> Option<Node> {
     let io_input_array = io_input.split(':').collect::<Vec<&str>>();
     match io_input_array[..] {
         [name, amount] => {
-            let test = amount.parse::<f32>().is_ok();
-            if !test {
-                println!("Invalid Input!: {} must be a number\ntry again", amount);
-                parse_input(data);
-            }
             let node = Node {
                 product_kind: ProductKind::new(name.to_string()),
                 amount: amount.parse().unwrap(),
             };
-            if !data.map.contains_key(&node.product_kind) {
-                println!("Invalid Input!: {} is not a valid product\ntry again", name);
-                parse_input(data);
+            let test = amount.parse::<f32>().is_ok();
+            if !test {
+                println!("Invalid Input!: {} must be a number\ntry again", amount);
             }
-            Some(node)
+            else if !data.map.contains_key(&node.product_kind) {
+                println!("Invalid Input!: {} is not a valid product\ntry again", name);
+            } else {
+                return Some(node)
+            }
         },
-        _ => {
-            println!("Invalid Input!: try again");
-            parse_input(data)
+        ["help"] => {
+            println!("Possible commands:");
+            println!("{}", Command::Help)
         }
+        _ => {
+            println!("Invalid Input!: try again")
+        }
+
     }
+    return parse_input(data);
 }
 
 fn main() {
