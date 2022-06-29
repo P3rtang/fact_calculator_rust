@@ -1,14 +1,14 @@
-mod ui;
-
 use std::{fs, fmt::{Formatter, Display, Result}, io};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Write;
-use std::iter::Peekable;
-use std::process::{CommandArgs, exit};
+use std::iter::{Enumerate, Peekable};
+use std::process::exit;
 use std::str::Chars;
 use ansi_term::Colour;
-use crate::TokenKind::{Assign, Comma, Comment, Expr};
+use crate::Error::SyntaxError;
+
+static QUIT: bool = false;
 
 #[derive(Debug)]
 enum Command {
@@ -24,7 +24,7 @@ impl Command {
             Command::Help    => println!("{}", self),
             Command::Calc    => todo!("Calc not yet implemented"),
             Command::List(_) => print!("{}", self),
-            Command::New  => todo!("New not yet implemented"),
+            Command::New     => todo!("New not yet implemented"),
             // _ => {}
         }
     }
@@ -36,6 +36,37 @@ impl Display for Command {
             Command::Help => { write!(f, "{}", fs::read_to_string("help.txt").expect("failed to read file")) },
             Command::List(data) => { write!(f, "{}", data) },
             err => { panic!("Tried to print non-printable Command {:?}", err) }
+        }
+    }
+}
+
+
+#[derive(Debug)]
+enum Error {
+    SyntaxError(String, usize, String),
+}
+
+impl Error {
+    fn raise(&self) {
+        self.show();
+        exit(1);
+    }
+    fn show(&self) {
+        match self {
+            SyntaxError(_, _, _) => {
+                print!("{}", self);
+            }
+        }
+    }
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        match self {
+            SyntaxError(input, loc, info) => {
+                write!(f, "{}", input).expect("TODO: panic message");
+                writeln!(f, "{}^ SyntaxError: {}", " ".repeat(*loc), info)
+            }
         }
     }
 }
@@ -190,54 +221,58 @@ impl Tree {
 enum TokenKind {
     Comment,
     Expr,
-    Assign,
+    Colon,
     Comma,
+    Dash,
 }
 
 #[derive(Debug)]
 struct Token {
     kind: TokenKind,
-    text: Option<String>
+    text: Option<String>,
+    loc: Option<usize>
 }
 
 impl Token {
-    fn new(kind: TokenKind, text:Option<String>) -> Self { Token {kind, text} }
-    fn set_text(&mut self, text: String) {
-        self.text = Some(text)
-    }
+    fn new(kind: TokenKind, text:Option<String>, loc: Option<usize>) -> Self { Token {kind, text, loc} }
 }
 
 #[derive(Debug)]
 struct Lexer<Char: Iterator<Item=char>> {
-    chars: Peekable<Char>
+    input: String,
+    chars: Peekable<Enumerate<Char>>
 }
 
 impl <Char: Iterator<Item=char>> Iterator for Lexer<Char> {
     type Item = Token;
 
     fn next(&mut self) -> Option<Self::Item> {
+        use crate::TokenKind::{Colon, Comma, Comment, Dash, Expr};
         let mut text = String::new();
-        if let Some(x) = self.chars.next() {
+        if let Some((loc, x)) = self.chars.next() {
             text.push(x);
             match x {
-                ':' => Some(Token::new(Assign, Some(text))),
-                ',' => Some(Token::new(Comma, Some(text))),
-                '#' => Some(Token::new(Comment, Some(text))),
+                ':' => Some(Token::new(Colon, Some(text), Some(loc))),
+                ',' => Some(Token::new(Comma, Some(text), Some(loc))),
+                '#' => Some(Token::new(Comment, Some(text), Some(loc))),
+                '-' => Some(Token::new(Dash, Some(text), Some(loc))),
                 ' ' => self.next(),
-                _ => {
-                    while self.chars.peek().unwrap().is_alphanumeric() {
-                        text.push(self.chars.next().unwrap())
+                '\n' => None,
+                char if char.is_alphanumeric() => {
+                    while self.chars.peek().unwrap().1.is_alphanumeric() {
+                        text.push(self.chars.next().unwrap().1)
                     };
-                    return Some(Token::new(Expr, Some(text)))
+                    return Some(Token::new(Expr, Some(text), Some(loc)))
                 }
+                _ => { SyntaxError(self.input.clone(), loc, "Unexpected Character".to_string()).show(); None}
             }
         } else { None }
     }
 }
 
 impl <Char: Iterator<Item=char>> Lexer<Char> {
-    fn new(chars: Char) -> Self{
-        Self { chars: chars.peekable() }
+    fn new(input: String, chars: Char) -> Self{
+        Self { input, chars: chars.enumerate().peekable() }
     }
 }
 
@@ -329,7 +364,7 @@ fn parse_input(data: &ProductList) -> Option<Node> {
                 "help" => Some(Command::Help),
                 "calc" => Some(Command::Calc),
                 "list" => Some(Command::List(data.clone())),
-                "New"  => Some(Command::New),
+                "new"  => Some(Command::New),
                 "exit" => exit(0),
                 _ => None
             };
@@ -343,12 +378,23 @@ fn parse_input(data: &ProductList) -> Option<Node> {
     return parse_input(data);
 }
 
-// fn main() {
-//     println!("{:?}", 'a'.is_alphanumeric())
-// }
+fn parse_lexer(mut lexer: Lexer<Chars>) -> Option<Command>{
+    if let Some(token) = lexer.next() {
+        match token.kind {
+            TokenKind::Expr => {
+                match token.text.unwrap().as_str() {
+                    "exit" => exit(0),
+                    "new"  => Some(Command::New),
+                    _ => None
+                }
+            },
+            _ => todo!(),
+        }
+    } else { None }
+}
 
 fn main() {
-    let data = parse_file("products.csv");
+    let _data = parse_file("products.csv");
     println!("------------------------------------------------------");
     println!("Give name of the product and amount separated by ':'\nexample: 'green_circuit: 10'");
     println!("------------------------------------------------------");
@@ -356,12 +402,12 @@ fn main() {
     //     Some(node) => Tree::new(node, 0, &data).traverse(),
     //     None => {}
     // }
-    let mut io_input = String::new();
-    print!("> ");
-    io::stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
-    io::stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
-    let lexer = Lexer::new(io_input.chars());
-    for token in lexer {
-        println!("{:?}", token)
+    while !QUIT {
+        let mut io_input = String::new();
+        print!("> ");
+        io::stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
+        io::stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
+        let lexer = Lexer::new(io_input.clone(), io_input.chars());
+        if let Some(_command) = parse_lexer(lexer) {} else {};
     }
 }
