@@ -1,0 +1,9 @@
+Factorio Calculator:
+Help page:
+
+- possible commands:
+    · Help: show this page
+    · List: shows a page with all possible products
+    · Calc: [WIP] will help with string input
+    · Save: [WIP] will save any added products to a csv
+    · Exit: save and exits the program

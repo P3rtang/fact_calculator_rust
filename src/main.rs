@@ -1,39 +1,83 @@
-#![allow(non_snake_case)]
-use std::{fs, io, fmt::{Formatter, Display, Result}};
+mod ui;
+
+use std::{fs, fmt::{Formatter, Display, Result}, io};
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Write;
-#[allow(dead_code)]
+use std::iter::Peekable;
+use std::process::{CommandArgs, exit};
+use std::str::Chars;
+use ansi_term::Colour;
+use crate::TokenKind::{Assign, Comma, Comment, Expr};
 
+#[derive(Debug)]
 enum Command {
     Help,
     Calc,
-    List,
+    List(ProductList),
+    New
+}
+
+impl Command {
+    fn run(&self) {
+        match self {
+            Command::Help    => println!("{}", self),
+            Command::Calc    => todo!("Calc not yet implemented"),
+            Command::List(_) => print!("{}", self),
+            Command::New  => todo!("New not yet implemented"),
+            // _ => {}
+        }
+    }
 }
 
 impl Display for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        write!(f, "Help\nCalc\nList")
+        match self {
+            Command::Help => { write!(f, "{}", fs::read_to_string("help.txt").expect("failed to read file")) },
+            Command::List(data) => { write!(f, "{}", data) },
+            err => { panic!("Tried to print non-printable Command {:?}", err) }
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Product {
+    kind: ProductKind,
     time: f32,
     amount: i8,
+    recipe_products: HashMap<ProductKind, i8>,
 }
 
-impl Product {
-    fn new(time: f32, amount: i8) -> Product {
-        let product = Product{ time, amount};
-        product
+impl PartialEq<Product> for Product {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+    }
+}
+impl PartialEq<ProductKind> for Product {
+    fn eq(&self, other: &ProductKind) -> bool {
+        self.kind == *other
     }
 }
 
-#[derive(Debug, Clone)]
-struct Recipe {
-    recipe_length: usize,
-    sub_products: Vec<ProductKind>,
-    sub_prod_amount: Vec<i8>,
+impl Eq for Product {}
+
+impl PartialOrd<Self> for Product {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(&other))
+    }
+}
+
+impl Ord for Product {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.kind.cmp(&other.kind)
+    }
+}
+
+impl Product {
+    fn new(kind: ProductKind, time: f32, amount: i8, recipe_products: HashMap<ProductKind, i8>) -> Product {
+        let product = Product{ kind, time, amount, recipe_products};
+        product
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -53,19 +97,46 @@ impl Display for ProductKind {
     }
 }
 
+impl PartialOrd<Self> for ProductKind {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(&other))
+    }
+}
+
+impl Ord for ProductKind {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.name.cmp(&other.name)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProductList {
-    map: HashMap<ProductKind, (Product, Recipe)>
+    list: Vec<Product>
+}
+
+impl Display for ProductList {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        let mut display = "".to_string();
+        let mut key_slice = self.list.clone();
+        key_slice.sort();
+        for key in key_slice {
+            display += &format!("{}\n", key.kind)
+        }
+        writeln!(f, "{}", Colour::RGB(77, 208, 225).paint(display))
+    }
 }
 
 impl ProductList {
-    fn get_product(&self, product_kind: ProductKind) -> Option<&(Product, Recipe)> {
-        for (p, data) in &self.map {
-            if p == &product_kind {
-                return Some(&data)
+    fn get_product(&self, product_kind: &ProductKind) -> Option<&Product> {
+        for p in &self.list {
+            if p == product_kind {
+                return Some(p)
             }
         }
         return None
+    }
+    fn contains(&self, product_kind: &ProductKind) -> bool {
+        return self.get_product(product_kind) != None
     }
 }
 
@@ -115,56 +186,120 @@ impl Tree {
     }
 }
 
+#[derive(Debug)]
+enum TokenKind {
+    Comment,
+    Expr,
+    Assign,
+    Comma,
+}
+
+#[derive(Debug)]
+struct Token {
+    kind: TokenKind,
+    text: Option<String>
+}
+
+impl Token {
+    fn new(kind: TokenKind, text:Option<String>) -> Self { Token {kind, text} }
+    fn set_text(&mut self, text: String) {
+        self.text = Some(text)
+    }
+}
+
+#[derive(Debug)]
+struct Lexer<Char: Iterator<Item=char>> {
+    chars: Peekable<Char>
+}
+
+impl <Char: Iterator<Item=char>> Iterator for Lexer<Char> {
+    type Item = Token;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut text = String::new();
+        if let Some(x) = self.chars.next() {
+            text.push(x);
+            match x {
+                ':' => Some(Token::new(Assign, Some(text))),
+                ',' => Some(Token::new(Comma, Some(text))),
+                '#' => Some(Token::new(Comment, Some(text))),
+                ' ' => self.next(),
+                _ => {
+                    while self.chars.peek().unwrap().is_alphanumeric() {
+                        text.push(self.chars.next().unwrap())
+                    };
+                    return Some(Token::new(Expr, Some(text)))
+                }
+            }
+        } else { None }
+    }
+}
+
+impl <Char: Iterator<Item=char>> Lexer<Char> {
+    fn new(chars: Char) -> Self{
+        Self { chars: chars.peekable() }
+    }
+}
+
 fn generate_result(node: Node, data: &ProductList) -> Vec<Node> {
     let mut result_vec = vec![];
     // scalar references items per second
-    let sub = &data.map[&node.product_kind.clone()];
-    let scalar = node.amount / &sub.0.time;
-    for index in 0..sub.1.recipe_length {
-        let sub_time = data.get_product(sub.1.sub_products[index].clone());
-        match sub_time {
-            Some(tuple) =>
-                result_vec.push(
-                    Node {
-                        product_kind: sub.1.sub_products[index].clone(),
-                        amount:  scalar * sub.1.sub_prod_amount[index] as f32 * tuple.0.time / tuple.0.amount as f32
-                    }
-                ),
-            None => {}
-        }
+    let sub = data.get_product(&node.product_kind);
+    match sub {
+        None => {},
+        Some(product) => {
+            let scalar = node.amount / product.time;
+            for (product_kind, amount) in product.recipe_products.clone() {
+                let sub_time = data.get_product(&product_kind);
+                match sub_time {
+                    Some(product) =>
+                        result_vec.push(
+                            Node {
+                                product_kind,
+                                amount:  scalar * amount as f32 * product.time / product.amount as f32
+                            }
+                        ),
+                    None => {}
+                }
+            }}
     }
+
     result_vec
 }
 
-fn parse_file(filename: &str) -> ProductList {
-    let mut map: HashMap<ProductKind, (Product, Recipe)> = HashMap::new();
+fn parse_file(filename: &str) -> ProductList{
+
+    fn parse_recipe(recipe_list: &[&str]) -> HashMap<ProductKind, i8> {
+        let mut return_map = HashMap::new();
+        for sub in recipe_list {
+            let sub_vec = sub.split(':').collect::<Vec<&str>>();
+            return_map.insert(ProductKind::new(sub_vec[1].to_string()), sub_vec[1].parse().unwrap());
+        }
+        return return_map
+    }
+
+    let mut list = vec![];
 
     let file = fs::read_to_string(filename)
         .expect("failed to read file");
     for line in file.split('\n') {
-        let parse_line: Vec<&str> = line.split(',').collect();
-        let p = Product::new(
-            parse_line[1].parse().unwrap(),
-            parse_line[2].parse().unwrap()
-        );
-        let r= parse_recipe(&parse_line[3..]);
-
-        map.insert(ProductKind::new((&*parse_line[0].to_string()).parse().unwrap()), (p, r));
-
+        match line.chars().peekable().peek() {
+            Some('#') => { },
+             _  => {
+                let parse_line: Vec<&str> = line.split(',').collect();
+                let p = Product::new(
+                    ProductKind::new(parse_line[0].to_string()),
+                    parse_line[1].parse().unwrap(),
+                    parse_line[2].parse().unwrap(),
+                    parse_recipe(&parse_line[3..])
+                );
+                list.push(p);
+            }
+        }
     }
-    return ProductList { map };
+    return ProductList { list };
 }
 
-fn parse_recipe(recipe_list: &[&str]) -> Recipe {
-    let mut products_vec = vec![];
-    let mut amount_vec = vec![];
-    for sub in recipe_list {
-        let sub_vec = sub.split(':').collect::<Vec<&str>>();
-        products_vec.push(ProductKind::new(sub_vec[0].to_string()));
-        amount_vec.push(sub_vec[1].parse().unwrap());
-    }
-    Recipe { recipe_length: products_vec.len(), sub_products: products_vec, sub_prod_amount: amount_vec }
-}
 
 fn parse_input(data: &ProductList) -> Option<Node> {
     let mut io_input = String::new();
@@ -183,15 +318,22 @@ fn parse_input(data: &ProductList) -> Option<Node> {
             if !test {
                 println!("Invalid Input!: {} must be a number\ntry again", amount);
             }
-            else if !data.map.contains_key(&node.product_kind) {
+            else if !data.contains(&node.product_kind) {
                 println!("Invalid Input!: {} is not a valid product\ntry again", name);
             } else {
                 return Some(node)
             }
         },
-        ["help"] => {
-            println!("Possible commands:");
-            println!("{}", Command::Help)
+        [text] => {
+            let command_query = match text.to_ascii_lowercase().as_str() {
+                "help" => Some(Command::Help),
+                "calc" => Some(Command::Calc),
+                "list" => Some(Command::List(data.clone())),
+                "New"  => Some(Command::New),
+                "exit" => exit(0),
+                _ => None
+            };
+            match command_query { Some(command) => command.run(), None => {}}
         }
         _ => {
             println!("Invalid Input!: try again")
@@ -201,13 +343,25 @@ fn parse_input(data: &ProductList) -> Option<Node> {
     return parse_input(data);
 }
 
+// fn main() {
+//     println!("{:?}", 'a'.is_alphanumeric())
+// }
+
 fn main() {
     let data = parse_file("products.csv");
     println!("------------------------------------------------------");
     println!("Give name of the product and amount separated by ':'\nexample: 'green_circuit: 10'");
     println!("------------------------------------------------------");
-    match parse_input(&data) {
-        Some(node) => Tree::new(node, 0, &data).traverse(),
-        None => {}
+    // match parse_input(&data) {
+    //     Some(node) => Tree::new(node, 0, &data).traverse(),
+    //     None => {}
+    // }
+    let mut io_input = String::new();
+    print!("> ");
+    io::stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
+    io::stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
+    let lexer = Lexer::new(io_input.chars());
+    for token in lexer {
+        println!("{:?}", token)
     }
 }
