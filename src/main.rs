@@ -1,4 +1,5 @@
 use std::{fs, fmt::{Formatter, Display, Result}, io};
+use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Write;
@@ -6,35 +7,40 @@ use std::iter::{Enumerate, Peekable};
 use std::process::exit;
 use std::str::Chars;
 use ansi_term::Colour;
-use crate::Error::SyntaxError;
+use crate::Error::{KeyError, SyntaxError};
+use crate::TokenKind::Colon;
 
 static QUIT: bool = false;
 
 #[derive(Debug)]
-enum Command {
+enum CommandKind {
     Help,
     Calc,
     List(ProductList),
     New
 }
 
+struct Command {
+    kind: CommandKind
+
+}
+
 impl Command {
     fn run(&self) {
-        match self {
-            Command::Help    => println!("{}", self),
-            Command::Calc    => todo!("Calc not yet implemented"),
-            Command::List(_) => print!("{}", self),
-            Command::New     => todo!("New not yet implemented"),
-            // _ => {}
+        match &self.kind {
+            CommandKind::Help    => println!("{}", self),
+            CommandKind::Calc    => todo!("Calc not yet implemented"),
+            CommandKind::List(_) => print!("{}", self),
+            CommandKind::New     => {},
         }
     }
 }
 
 impl Display for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        match self {
-            Command::Help => { write!(f, "{}", fs::read_to_string("help.txt").expect("failed to read file")) },
-            Command::List(data) => { write!(f, "{}", data) },
+        match &self.kind {
+            CommandKind::Help => { write!(f, "{}", fs::read_to_string("help.txt").expect("failed to read file")) },
+            CommandKind::List(data) => { write!(f, "{}", data) },
             err => { panic!("Tried to print non-printable Command {:?}", err) }
         }
     }
@@ -43,7 +49,8 @@ impl Display for Command {
 
 #[derive(Debug)]
 enum Error {
-    SyntaxError(String, usize, String),
+    SyntaxError (String, usize, String),
+    KeyError    (String, usize, String),
 }
 
 impl Error {
@@ -53,9 +60,8 @@ impl Error {
     }
     fn show(&self) {
         match self {
-            SyntaxError(_, _, _) => {
-                print!("{}", self);
-            }
+            SyntaxError(_, _, _) => { print!("{}", self) }
+            KeyError   (_, _, _) => { print!("{}", self) }
         }
     }
 }
@@ -66,6 +72,10 @@ impl Display for Error {
             SyntaxError(input, loc, info) => {
                 write!(f, "{}", input).expect("TODO: panic message");
                 writeln!(f, "{}^ SyntaxError: {}", " ".repeat(*loc), info)
+            }
+            KeyError(input, loc, info) => {
+                write!(f, "{}", input).expect("TODO: panic message");
+                writeln!(f, "{}^ KeyError: {}", " ".repeat(*loc), info)
             }
         }
     }
@@ -335,57 +345,14 @@ fn parse_file(filename: &str) -> ProductList{
     return ProductList { list };
 }
 
-
-fn parse_input(data: &ProductList) -> Option<Node> {
-    let mut io_input = String::new();
-    print!("> ");
-    io::stdout().flush().expect("TODO: panic message");
-    io::stdin().read_line(&mut io_input).expect("TODO: panic message");
-    io_input = io_input.replace("\n", "").replace(" ", "");
-    let io_input_array = io_input.split(':').collect::<Vec<&str>>();
-    match io_input_array[..] {
-        [name, amount] => {
-            let node = Node {
-                product_kind: ProductKind::new(name.to_string()),
-                amount: amount.parse().unwrap(),
-            };
-            let test = amount.parse::<f32>().is_ok();
-            if !test {
-                println!("Invalid Input!: {} must be a number\ntry again", amount);
-            }
-            else if !data.contains(&node.product_kind) {
-                println!("Invalid Input!: {} is not a valid product\ntry again", name);
-            } else {
-                return Some(node)
-            }
-        },
-        [text] => {
-            let command_query = match text.to_ascii_lowercase().as_str() {
-                "help" => Some(Command::Help),
-                "calc" => Some(Command::Calc),
-                "list" => Some(Command::List(data.clone())),
-                "new"  => Some(Command::New),
-                "exit" => exit(0),
-                _ => None
-            };
-            match command_query { Some(command) => command.run(), None => {}}
-        }
-        _ => {
-            println!("Invalid Input!: try again")
-        }
-
-    }
-    return parse_input(data);
-}
-
-fn parse_lexer(mut lexer: Lexer<Chars>) -> Option<Command>{
+fn parse_lexer(mut lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
     if let Some(token) = lexer.next() {
         match token.kind {
             TokenKind::Expr => {
                 match token.text.unwrap().as_str() {
                     "exit" => exit(0),
-                    "new"  => Some(Command::New),
-                    _ => None
+                    "new"  => { Some(Command {kind:CommandKind::New}) },
+                    _ => { None }
                 }
             },
             _ => todo!(),
@@ -407,7 +374,7 @@ fn main() {
         print!("> ");
         io::stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
         io::stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
-        let lexer = Lexer::new(io_input.clone(), io_input.chars());
-        if let Some(_command) = parse_lexer(lexer) {} else {};
+        let mut lexer = Lexer::new(io_input.clone(), io_input.chars());
+        if let Some(command) = parse_lexer(&mut lexer) { command.run() } else {};
     }
 }
