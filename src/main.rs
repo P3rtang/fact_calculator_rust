@@ -2,13 +2,13 @@ use std::{fs, fmt::{Formatter, Display, Result}, io};
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::io::Write;
+use std::fmt::write;
+use std::io::{Read, Write};
 use std::iter::{Enumerate, Peekable};
 use std::process::exit;
 use std::str::Chars;
 use ansi_term::Colour;
-use crate::Error::{KeyError, SyntaxError};
-use crate::TokenKind::Colon;
+use crate::Error::{KeyError, SyntaxError, ValueError};
 
 static QUIT: bool = false;
 
@@ -16,22 +16,38 @@ static QUIT: bool = false;
 enum CommandKind {
     Help,
     Calc,
-    List(ProductList),
+    List,
     New
 }
 
 struct Command {
     kind: CommandKind,
-    args: Option<Vec<Token>>
+    args: Vec<Token>
 }
 
 impl Command {
-    fn run(&self) {
+    fn run(&self, data: &ProductList) {
         match &self.kind {
             CommandKind::Help    => println!("{}", self),
             CommandKind::Calc    => todo!("Calc not yet implemented"),
-            CommandKind::List(_) => print!("{}", self),
-            CommandKind::New     => {},
+            CommandKind::List    => print!("{}", data),
+            CommandKind::New     => {
+                let mut recipe = Vec::new();
+                let info = (new_product_amount(), new_product_time());
+
+                while let Some(input) = new_product_recipe_dialog() {
+                    let rec_part = RecipePart { kind: ProductKind { name: input.0.clone() }, amount: input.1.clone() };
+                    if data.contains(&rec_part.kind) {
+                        recipe.push(rec_part)
+                    } else {
+                        ValueError(input.0.clone(), input.1 as usize + 8, format!("The given subproduct {} is not defined", input.0)).show();
+                    }
+                }
+                println!("\nAdding product:\n \t{} [production amount:: {}, production time:: {}]", self.args[0].text, info.0, info.1);
+                for part in recipe {
+                   println!("Adding recipe:\n{}", part)
+                }
+            }
         }
     }
 }
@@ -40,7 +56,6 @@ impl Display for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match &self.kind {
             CommandKind::Help => { write!(f, "{}", fs::read_to_string("help.txt").expect("failed to read file")) },
-            CommandKind::List(data) => { write!(f, "{}", data) },
             err => { panic!("Tried to print non-printable Command {:?}", err) }
         }
     }
@@ -51,6 +66,7 @@ impl Display for Command {
 enum Error {
     SyntaxError (String, usize, String),
     KeyError    (String, usize, String),
+    ValueError  (String, usize, String),
 }
 
 impl Error {
@@ -62,6 +78,7 @@ impl Error {
         match self {
             SyntaxError(_, _, _) => { print!("{}", self) }
             KeyError   (_, _, _) => { print!("{}", self) }
+            ValueError (_, _, _) => { print!("{}", self) }
         }
     }
 }
@@ -75,12 +92,26 @@ impl Display for Error {
             KeyError(_, loc, info) => {
                 writeln!(f, "{}^ KeyError: {}", " ".repeat(*loc + 2), info)
             }
+            ValueError(_, loc, info) => {
+                writeln!(f, "{}^ ValueError: {}", " ".repeat(*loc + 2), info)
+            }
         }
     }
 }
 
+struct RecipePart {
+    kind: ProductKind,
+    amount: i8,
+}
+
+impl Display for RecipePart {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        writeln!(f, "\t{}: {}", self.kind, self.amount)
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct Product {
+struct Product {
     kind: ProductKind,
     time: f32,
     amount: i8,
@@ -225,7 +256,7 @@ impl Tree {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum TokenKind {
     Comment,
     Expr,
@@ -267,8 +298,10 @@ impl <Char: Iterator<Item=char>> Iterator for Lexer<Char> {
                 ' ' => self.next(),
                 '\n' => None,
                 char if char.is_alphanumeric() => {
-                    while self.chars.peek().unwrap().1.is_alphanumeric() {
-                        text.push(self.chars.next().unwrap().1)
+                    while let char = self.chars.peek().unwrap().1 {
+                        if char.is_alphanumeric() || char == '_' {
+                            text.push(self.chars.next().unwrap().1)
+                        } else { break }
                     };
                     return Some(Token::new(Expr, text, loc))
                 }
@@ -360,7 +393,7 @@ fn parse_lexer(mut lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
                             SyntaxError("".to_string(), 4, format!("Expected 1 arguments but got {}", args.len())).show();
                             return None
                         }
-                        Some(Command {kind:CommandKind::New, args: Some(args) })
+                        Some(Command { kind:CommandKind::New, args: args })
                     },
                     "help" => { None }
                     err => {
@@ -374,8 +407,70 @@ fn parse_lexer(mut lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
     } else { None }
 }
 
+fn new_product_amount () -> i8 {
+    let mut amount = String::new();
+
+    print!("amount crafted:: ");
+    io::stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
+    io::stdin().read_line(&mut amount).expect("ERROR: Failed to read io::stdin");
+    amount = amount.replace("\n", "");
+    println!("{:?}", amount);
+    return match amount.parse::<i8>() {
+        Ok(int) => { int }
+        Err(_) => {
+            ValueError(amount, 15, format!("Expected a number")).show();
+            new_product_amount()
+        }
+    }
+}
+
+fn new_product_time () -> f32 {
+    let mut time = String::new();
+
+    print!("time needed:: ");
+    io::stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
+    io::stdin().read_line(&mut time).expect("ERROR: Failed to read io::stdin");
+    time = time.replace("\n", "");
+    return match time.parse::<f32>() {
+        Ok(float) => { float }
+        Err(_) => {
+            ValueError(time, 8, format!("Expected a number")).show();
+            new_product_time()
+        }
+    }
+}
+
+fn new_product_recipe_dialog () -> Option<(String, i8)> {
+    let mut io_input = String::new();
+    print!("recipe part:: ");
+    io::stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
+    io::stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
+    let mut lexer = Lexer::new(io_input.clone(), io_input.chars());
+
+    match lexer.next() {
+        Some(token) if token.kind == TokenKind::Expr => {
+            match lexer.next() {
+                Some(amount) => {
+                    return match amount.clone().text.parse::<i8>() {
+                        Ok(int) => { Some((token.text, int)) }
+                        Err(_) => {
+                            ValueError(amount.text, amount.loc + 13, format!("Expected a number")).show();
+                            None
+                        }
+                    }
+                }
+                _ => return None
+            }
+        }
+        _ => return None
+    }
+
+    return None
+}
+
+
 fn main() {
-    let _data = parse_file("products.csv");
+    let data = parse_file("products.csv");
     println!("------------------------------------------------------");
     println!("Give name of the product and amount separated by ':'\nexample: 'green_circuit: 10'");
     println!("------------------------------------------------------");
@@ -389,6 +484,6 @@ fn main() {
         io::stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
         io::stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
         let mut lexer = Lexer::new(io_input.clone(), io_input.chars());
-        if let Some(command) = parse_lexer(&mut lexer) { command.run() } else {};
+        if let Some(command) = parse_lexer(&mut lexer) { command.run(&data) } else {};
     }
 }
