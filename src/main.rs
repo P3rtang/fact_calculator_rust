@@ -21,8 +21,8 @@ enum CommandKind {
 }
 
 struct Command {
-    kind: CommandKind
-
+    kind: CommandKind,
+    args: Option<Vec<Token>>
 }
 
 impl Command {
@@ -69,13 +69,11 @@ impl Error {
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
-            SyntaxError(input, loc, info) => {
-                write!(f, "{}", input).expect("TODO: panic message");
-                writeln!(f, "{}^ SyntaxError: {}", " ".repeat(*loc), info)
+            SyntaxError(_, loc, info) => {
+                writeln!(f, "{}^ SyntaxError: {}", " ".repeat(*loc + 2), info)
             }
-            KeyError(input, loc, info) => {
-                write!(f, "{}", input).expect("TODO: panic message");
-                writeln!(f, "{}^ KeyError: {}", " ".repeat(*loc), info)
+            KeyError(_, loc, info) => {
+                writeln!(f, "{}^ KeyError: {}", " ".repeat(*loc + 2), info)
             }
         }
     }
@@ -227,7 +225,7 @@ impl Tree {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum TokenKind {
     Comment,
     Expr,
@@ -236,18 +234,18 @@ enum TokenKind {
     Dash,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Token {
     kind: TokenKind,
-    text: Option<String>,
-    loc: Option<usize>
+    text: String,
+    loc: usize,
 }
 
 impl Token {
-    fn new(kind: TokenKind, text:Option<String>, loc: Option<usize>) -> Self { Token {kind, text, loc} }
+    fn new(kind: TokenKind, text:String, loc: usize) -> Self { Token {kind, text, loc} }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Lexer<Char: Iterator<Item=char>> {
     input: String,
     chars: Peekable<Enumerate<Char>>
@@ -262,17 +260,17 @@ impl <Char: Iterator<Item=char>> Iterator for Lexer<Char> {
         if let Some((loc, x)) = self.chars.next() {
             text.push(x);
             match x {
-                ':' => Some(Token::new(Colon, Some(text), Some(loc))),
-                ',' => Some(Token::new(Comma, Some(text), Some(loc))),
-                '#' => Some(Token::new(Comment, Some(text), Some(loc))),
-                '-' => Some(Token::new(Dash, Some(text), Some(loc))),
+                ':' => Some(Token::new(Colon, text, loc)),
+                ',' => Some(Token::new(Comma, text, loc)),
+                '#' => Some(Token::new(Comment, text, loc)),
+                '-' => Some(Token::new(Dash, text, loc)),
                 ' ' => self.next(),
                 '\n' => None,
                 char if char.is_alphanumeric() => {
                     while self.chars.peek().unwrap().1.is_alphanumeric() {
                         text.push(self.chars.next().unwrap().1)
                     };
-                    return Some(Token::new(Expr, Some(text), Some(loc)))
+                    return Some(Token::new(Expr, text, loc))
                 }
                 _ => { SyntaxError(self.input.clone(), loc, "Unexpected Character".to_string()).show(); None}
             }
@@ -349,10 +347,26 @@ fn parse_lexer(mut lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
     if let Some(token) = lexer.next() {
         match token.kind {
             TokenKind::Expr => {
-                match token.text.unwrap().as_str() {
+                match token.text.to_ascii_lowercase().as_str() {
                     "exit" => exit(0),
-                    "new"  => { Some(Command {kind:CommandKind::New}) },
-                    _ => { None }
+                    "new"  => {
+                        let args:Vec<Token> = lexer.collect();
+                        if args.len() > 1{
+                            let err = args[1].clone();
+                            SyntaxError(err.text, err.loc, format!("Expected 1 arguments but got {}", args.len())).show();
+                            return None
+                        }
+                        else if args.len() == 0 {
+                            SyntaxError("".to_string(), 4, format!("Expected 1 arguments but got {}", args.len())).show();
+                            return None
+                        }
+                        Some(Command {kind:CommandKind::New, args: Some(args) })
+                    },
+                    "help" => { None }
+                    err => {
+                        KeyError(err.to_string(), token.loc, "Unexpected Command use --help for possible commands".to_string()).show();
+                        None
+                    }
                 }
             },
             _ => todo!(),
