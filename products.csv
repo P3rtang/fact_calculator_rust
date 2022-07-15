@@ -15,11 +15,3 @@ transport_belt,0.25,1,single_c_engine:1,iron_plate:1
 sand,0.5,1,stone:1
 stone,1,1
 glass,4,1,sand:4
-# New:: Name, Time, Amount \n
-# ... Product, Amount \n
-# ... Product, Amount \n
-# ... \n
-#
-# eg:
-# New:: Steel, 1, 1
-# ... Iron Plate, 5

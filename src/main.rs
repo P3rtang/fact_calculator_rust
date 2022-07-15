@@ -1,9 +1,7 @@
 use std::{fs, fmt::{Formatter, Display, Result}, io};
-use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::fmt::write;
-use std::io::{Read, Write};
+use std::io::{Write};
 use std::iter::{Enumerate, Peekable};
 use std::process::exit;
 use std::str::Chars;
@@ -17,7 +15,7 @@ enum CommandKind {
     Help,
     Calc,
     List,
-    New
+    New,
 }
 
 struct Command {
@@ -29,7 +27,19 @@ impl Command {
     fn run(&self, data: &ProductList) {
         match &self.kind {
             CommandKind::Help    => println!("{}", self),
-            CommandKind::Calc    => todo!("Calc not yet implemented"),
+            CommandKind::Calc    => {
+                match &self.args[..] {
+                    [token1, token2] => {
+                        let node = Node { product_kind: ProductKind { name: token1.clone().text }, amount: token2.text.parse().unwrap() };
+                        let tree = Tree::new(node, 0, data);
+                        tree.traverse()
+                    }
+                    [err,..] => {
+                        SyntaxError(err.clone().text, err.loc, format!("expected 2 arguments for calc found {}", self.args.len())).show()
+                    }
+                    [] =>  { todo!("calc interactive session not implemented yet") }
+                }
+            },
             CommandKind::List    => print!("{}", data),
             CommandKind::New     => {
                 let mut recipe = Vec::new();
@@ -47,6 +57,7 @@ impl Command {
                 for part in recipe {
                    println!("Adding recipe:\n{}", part)
                 }
+
             }
         }
     }
@@ -70,7 +81,7 @@ enum Error {
 }
 
 impl Error {
-    fn raise(&self) {
+    fn _raise(&self) {
         self.show();
         exit(1);
     }
@@ -109,7 +120,7 @@ impl Display for RecipePart {
         writeln!(f, "\t{}: {}", self.kind, self.amount)
     }
 }
-
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct Product {
     kind: ProductKind,
@@ -222,8 +233,7 @@ impl Display for Node {
     }
 }
 
-
-#[derive(Debug)]
+#[allow(dead_code)]
 struct Tree {
     parent: Node,
     indent: usize,
@@ -237,6 +247,7 @@ impl Display for Tree {
     }
 }
 
+#[allow(dead_code)]
 impl Tree {
     fn new (node: Node, indent: usize, data: &ProductList) -> Tree {
         let mut children = vec![];
@@ -298,6 +309,7 @@ impl <Char: Iterator<Item=char>> Iterator for Lexer<Char> {
                 ' ' => self.next(),
                 '\n' => None,
                 char if char.is_alphanumeric() => {
+                    #[allow(irrefutable_let_patterns)]
                     while let char = self.chars.peek().unwrap().1 {
                         if char.is_alphanumeric() || char == '_' {
                             text.push(self.chars.next().unwrap().1)
@@ -337,7 +349,8 @@ fn generate_result(node: Node, data: &ProductList) -> Vec<Node> {
                         ),
                     None => {}
                 }
-            }}
+            }
+        }
     }
 
     result_vec
@@ -349,7 +362,7 @@ fn parse_file(filename: &str) -> ProductList{
         let mut return_map = HashMap::new();
         for sub in recipe_list {
             let sub_vec = sub.split(':').collect::<Vec<&str>>();
-            return_map.insert(ProductKind::new(sub_vec[1].to_string()), sub_vec[1].parse().unwrap());
+            return_map.insert(ProductKind::new(sub_vec[0].to_string()), sub_vec[1].parse().unwrap());
         }
         return return_map
     }
@@ -361,22 +374,25 @@ fn parse_file(filename: &str) -> ProductList{
     for line in file.split('\n') {
         match line.chars().peekable().peek() {
             Some('#') => { },
-             _  => {
+            _  => {
                 let parse_line: Vec<&str> = line.split(',').collect();
-                let p = Product::new(
-                    ProductKind::new(parse_line[0].to_string()),
-                    parse_line[1].parse().unwrap(),
-                    parse_line[2].parse().unwrap(),
-                    parse_recipe(&parse_line[3..])
-                );
-                list.push(p);
+                if parse_line != [""] {
+                    let p = Product::new(
+                        ProductKind::new(parse_line[0].to_string()),
+                        parse_line[1].parse().unwrap(),
+                        parse_line[2].parse().unwrap(),
+                        parse_recipe(&parse_line[3..])
+                    );
+                    list.push(p);
+                }
+                else {}
             }
         }
     }
     return ProductList { list };
 }
 
-fn parse_lexer(mut lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
+fn parse_lexer(lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
     if let Some(token) = lexer.next() {
         match token.kind {
             TokenKind::Expr => {
@@ -393,9 +409,14 @@ fn parse_lexer(mut lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
                             SyntaxError("".to_string(), 4, format!("Expected 1 arguments but got {}", args.len())).show();
                             return None
                         }
-                        Some(Command { kind:CommandKind::New, args: args })
+                        Some(Command { kind:CommandKind::New, args })
                     },
-                    "help" => { None }
+                    "calc" => {
+                        let args:Vec<Token> = lexer.collect();
+                        Some(Command { kind:CommandKind::Calc, args })
+                    },
+                    "help" => { Some(Command { kind:CommandKind::Help, args: vec![] }) },
+                    "list" => { Some(Command { kind:CommandKind::List, args: vec![] }) },
                     err => {
                         KeyError(err.to_string(), token.loc, "Unexpected Command use --help for possible commands".to_string()).show();
                         None
@@ -414,7 +435,6 @@ fn new_product_amount () -> i8 {
     io::stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
     io::stdin().read_line(&mut amount).expect("ERROR: Failed to read io::stdin");
     amount = amount.replace("\n", "");
-    println!("{:?}", amount);
     return match amount.parse::<i8>() {
         Ok(int) => { int }
         Err(_) => {
@@ -447,11 +467,11 @@ fn new_product_recipe_dialog () -> Option<(String, i8)> {
     io::stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
     let mut lexer = Lexer::new(io_input.clone(), io_input.chars());
 
-    match lexer.next() {
+    return match lexer.next() {
         Some(token) if token.kind == TokenKind::Expr => {
             match lexer.next() {
                 Some(amount) => {
-                    return match amount.clone().text.parse::<i8>() {
+                    match amount.clone().text.parse::<i8>() {
                         Ok(int) => { Some((token.text, int)) }
                         Err(_) => {
                             ValueError(amount.text, amount.loc + 13, format!("Expected a number")).show();
@@ -459,20 +479,20 @@ fn new_product_recipe_dialog () -> Option<(String, i8)> {
                         }
                     }
                 }
-                _ => return None
+                _ => None
             }
         }
-        _ => return None
+        _ => None
     }
-
-    return None
 }
 
 
 fn main() {
     let data = parse_file("products.csv");
+    // print!("{:?}", data);
     println!("------------------------------------------------------");
-    println!("Give name of the product and amount separated by ':'\nexample: 'green_circuit: 10'");
+    println!("Give name of the product and amount separated by ':'\nexample: 'Calc green_circuit: 10'");
+    println!("or use the Calc command without arguments to get a guided calculation");
     println!("------------------------------------------------------");
     // match parse_input(&data) {
     //     Some(node) => Tree::new(node, 0, &data).traverse(),
