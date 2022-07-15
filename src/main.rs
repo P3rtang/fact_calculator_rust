@@ -37,7 +37,7 @@ impl Command {
                     [err,..] => {
                         SyntaxError(err.clone().text, err.loc, format!("expected 2 arguments for calc found {}", self.args.len())).show()
                     }
-                    [] =>  { todo!("calc interactive session not implemented yet") }
+                    [] =>  { todo!("calc interactive session") }
                 }
             },
             CommandKind::List    => print!("{}", data),
@@ -72,8 +72,6 @@ impl Display for Command {
     }
 }
 
-
-#[derive(Debug)]
 enum Error {
     SyntaxError (String, usize, String),
     KeyError    (String, usize, String),
@@ -121,7 +119,7 @@ impl Display for RecipePart {
     }
 }
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Product {
     kind: ProductKind,
     time: f32,
@@ -161,7 +159,7 @@ impl Product {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Clone)]
 struct ProductKind {
     name: String,
 }
@@ -190,7 +188,7 @@ impl Ord for ProductKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProductList {
     list: Vec<Product>
 }
@@ -221,7 +219,7 @@ impl ProductList {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Node {
     product_kind: ProductKind,
     amount: f32,
@@ -233,7 +231,6 @@ impl Display for Node {
     }
 }
 
-#[allow(dead_code)]
 struct Tree {
     parent: Node,
     indent: usize,
@@ -247,7 +244,6 @@ impl Display for Tree {
     }
 }
 
-#[allow(dead_code)]
 impl Tree {
     fn new (node: Node, indent: usize, data: &ProductList) -> Tree {
         let mut children = vec![];
@@ -267,7 +263,7 @@ impl Tree {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum TokenKind {
     Comment,
     Expr,
@@ -276,7 +272,7 @@ enum TokenKind {
     Dash,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Token {
     kind: TokenKind,
     text: String,
@@ -287,7 +283,7 @@ impl Token {
     fn new(kind: TokenKind, text:String, loc: usize) -> Self { Token {kind, text, loc} }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Lexer<Char: Iterator<Item=char>> {
     input: String,
     chars: Peekable<Enumerate<Char>>
@@ -423,7 +419,10 @@ fn parse_lexer(lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
                     }
                 }
             },
-            _ => todo!(),
+            _ => {
+                KeyError( token.clone().text, token.loc, format!("Unexpected Token {}", token.text) ).show();
+                None
+            },
         }
     } else { None }
 }
