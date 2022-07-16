@@ -1,12 +1,17 @@
-use std::{fs, fmt::{Formatter, Display, Result}, io};
+use std::{fs, fmt::{Formatter, Display, Result}, io::{stdout, stdin, Write}};
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::io::{Write};
+use std::io::{Stdin, Stdout};
 use std::iter::{Enumerate, Peekable};
 use std::process::exit;
 use std::str::Chars;
 use ansi_term::Colour;
-use crate::Error::{KeyError, SyntaxError, ValueError};
+use termion::color;
+use termion::event::{Event, Key, MouseEvent};
+use termion::input::{Events, MouseTerminal, TermRead};
+use termion::raw::{IntoRawMode, RawTerminal};
+use termion::cursor::DetectCursorPos;
+use crate::Error::{IOError, KeyError, SyntaxError, ValueError};
 
 static QUIT: bool = false;
 
@@ -37,7 +42,10 @@ impl Command {
                     [err,..] => {
                         SyntaxError(err.clone().text, err.loc, format!("expected 2 arguments for calc found {}", self.args.len())).show()
                     }
-                    [] =>  { todo!("calc interactive session not implemented yet") }
+                    [] => {
+                        let mut interactive_terminal = InTerminal::new();
+                        interactive_terminal.start_session(data);
+                    }
                 }
             },
             CommandKind::List    => print!("{}", data),
@@ -57,7 +65,6 @@ impl Command {
                 for part in recipe {
                    println!("Adding recipe:\n{}", part)
                 }
-
             }
         }
     }
@@ -78,6 +85,7 @@ enum Error {
     SyntaxError (String, usize, String),
     KeyError    (String, usize, String),
     ValueError  (String, usize, String),
+    IOError     (String, usize, String),
 }
 
 impl Error {
@@ -87,9 +95,10 @@ impl Error {
     }
     fn show(&self) {
         match self {
-            SyntaxError(_, _, _) => { print!("{}", self) }
-            KeyError   (_, _, _) => { print!("{}", self) }
-            ValueError (_, _, _) => { print!("{}", self) }
+            SyntaxError(_, _, _) => { eprint!("{}", self) }
+            KeyError   (_, _, _) => { eprint!("{}", self) }
+            ValueError (_, _, _) => { eprint!("{}", self) }
+            IOError    (_, _, _) => { eprint!("{}", self) }
         }
     }
 }
@@ -100,11 +109,14 @@ impl Display for Error {
             SyntaxError(_, loc, info) => {
                 writeln!(f, "{}^ SyntaxError: {}", " ".repeat(*loc + 2), info)
             }
-            KeyError(_, loc, info) => {
-                writeln!(f, "{}^ KeyError: {}", " ".repeat(*loc + 2), info)
+            KeyError(_, loc, info)    => {
+                writeln!(f, "{}^ KeyError: {}",    " ".repeat(*loc + 2), info)
             }
-            ValueError(_, loc, info) => {
-                writeln!(f, "{}^ ValueError: {}", " ".repeat(*loc + 2), info)
+            ValueError(_, loc, info)  => {
+                writeln!(f, "{}^ ValueError: {}",  " ".repeat(*loc + 2), info)
+            }
+            IOError(_, loc, info)  => {
+                writeln!(f, "{}^ IOError: {}",     " ".repeat(*loc + 2), info)
             }
         }
     }
@@ -137,6 +149,12 @@ impl PartialEq<Product> for Product {
 impl PartialEq<ProductKind> for Product {
     fn eq(&self, other: &ProductKind) -> bool {
         self.kind == *other
+    }
+}
+
+impl PartialEq<String> for Product {
+    fn eq(&self, other: &String) -> bool {
+        self.kind.name == *other
     }
 }
 
@@ -329,6 +347,21 @@ impl <Char: Iterator<Item=char>> Lexer<Char> {
     }
 }
 
+fn match_input (input: String, data: &ProductList) -> Option<ProductKind> {
+    if input == "" { return None}
+    for product in data.clone().list {
+        if product.kind.name.starts_with(&input) {
+            return Some(product.kind)
+        }
+    }
+    for product in data.clone().list {
+        if product.kind.name.contains(&input) {
+            return Some(product.kind)
+        }
+    }
+    return None
+}
+
 fn generate_result(node: Node, data: &ProductList) -> Vec<Node> {
     let mut result_vec = vec![];
     // scalar references items per second
@@ -418,12 +451,12 @@ fn parse_lexer(lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
                     "help" => { Some(Command { kind:CommandKind::Help, args: vec![] }) },
                     "list" => { Some(Command { kind:CommandKind::List, args: vec![] }) },
                     err => {
-                        KeyError(err.to_string(), token.loc, "Unexpected Command use --help for possible commands".to_string()).show();
+                        KeyError(err.to_string(), token.loc, "Unexpected Command use Help for possible commands".to_string()).show();
                         None
                     }
                 }
             },
-            _ => { SyntaxError(token.clone().text, token.loc, format!("Unexpected Token {}", token.text)); None },
+            _ => { SyntaxError(token.clone().text, token.loc, format!("Unexpected Token {} use Help for possible commands", token.text)); None },
         }
     } else { None }
 }
@@ -432,8 +465,8 @@ fn new_product_amount () -> i8 {
     let mut amount = String::new();
 
     print!("amount crafted:: ");
-    io::stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
-    io::stdin().read_line(&mut amount).expect("ERROR: Failed to read io::stdin");
+    stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
+    stdin().read_line(&mut amount).expect("ERROR: Failed to read io::stdin");
     amount = amount.replace("\n", "");
     return match amount.parse::<i8>() {
         Ok(int) => { int }
@@ -448,8 +481,8 @@ fn new_product_time () -> f32 {
     let mut time = String::new();
 
     print!("time needed:: ");
-    io::stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
-    io::stdin().read_line(&mut time).expect("ERROR: Failed to read io::stdin");
+    stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
+    stdin().read_line(&mut time).expect("ERROR: Failed to read io::stdin");
     time = time.replace("\n", "");
     return match time.parse::<f32>() {
         Ok(float) => { float }
@@ -460,11 +493,83 @@ fn new_product_time () -> f32 {
     }
 }
 
-fn new_product_recipe_dialog () -> Option<(String, i8)> {
+struct InTerminal {
+    input: String,
+    is_running: bool,
+}
+
+impl InTerminal {
+    fn new() -> Self {
+        return InTerminal { input: "".to_string(), is_running: false }
+    }
+    fn start_session(&mut self, data: &ProductList) {
+        fn parse_terminal() -> Option<Key> {
+            let stdin = stdin();
+            let _stdout = stdout().into_raw_mode().unwrap();
+            for c in stdin.events() {
+                let evt = c.unwrap();
+                return match evt {
+                    Event::Key(key) => {
+                        Some(key)
+                    }
+                    _ => { None }
+                }
+            }
+            return None
+        }
+
+        self.is_running = true;
+        while self.is_running {
+            let key = parse_terminal();
+
+            match key {
+                Some(Key::Backspace) => {
+                    if self.input.is_empty() {}
+                    else { self.input.remove(self.input.len() - 1); }
+                }
+                Some(Key::Char('\n')) => { break }
+                Some(Key::Char('\t')) => {
+                    self.input = match match_input(self.input.clone(), data) {
+                        Some(pkind) => {pkind.name}
+                        None => self.input.clone()
+                    }
+                }
+                Some(Key::Char(char)) => {
+                    self.input.push(char)
+                }
+                _ => { break }
+            }
+            let mut stdout = stdout().into_raw_mode().unwrap();
+            let (_, y) = match stdout.cursor_pos() {
+                Ok(pos) => pos,
+                Err(err) => {
+                    IOError( err.to_string(), 1, format!("Could not locate cursor, reverting to default 1, 1")).show();
+                    break
+                }
+            };
+            match match_input(self.input.clone(), data) {
+                Some(pkind) => {
+                    print!(
+                        "{}{}{}{}",
+                        termion::cursor::Goto(1, y),
+                        color::Fg(color::Rgb(0x77, 0x77, 0x77)),
+                        termion::clear::AfterCursor,
+                        pkind
+                    )
+                }
+                None => { print!("{}{}", termion::cursor::Goto(1, y), termion::clear::AfterCursor) }
+            }
+            print!("{}{}{}{}", termion::cursor::Goto(1, y), color::Fg(color::Green), self.input, color::Fg(color::Reset));
+            stdout.flush().unwrap();
+        }
+    }
+}
+
+fn new_product_recipe_dialog() -> Option<(String, i8)> {
     let mut io_input = String::new();
     print!("recipe part:: ");
-    io::stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
-    io::stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
+    stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
+    stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
     let mut lexer = Lexer::new(io_input.clone(), io_input.chars());
 
     return match lexer.next() {
@@ -486,7 +591,6 @@ fn new_product_recipe_dialog () -> Option<(String, i8)> {
     }
 }
 
-
 fn main() {
     let data = parse_file("products.csv");
     // print!("{:?}", data);
@@ -494,15 +598,11 @@ fn main() {
     println!("Give name of the product and amount separated by ':'\nexample: 'Calc green_circuit: 10'");
     println!("or use the Calc command without arguments to get a guided calculation");
     println!("------------------------------------------------------");
-    // match parse_input(&data) {
-    //     Some(node) => Tree::new(node, 0, &data).traverse(),
-    //     None => {}
-    // }
     while !QUIT {
         let mut io_input = String::new();
-        print!("> ");
-        io::stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
-        io::stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
+        print!("\n> ");
+        stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
+        stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
         let mut lexer = Lexer::new(io_input.clone(), io_input.chars());
         if let Some(command) = parse_lexer(&mut lexer) { command.run(&data) } else {};
     }
