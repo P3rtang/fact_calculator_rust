@@ -1,19 +1,17 @@
 use std::{fs, fmt::{Formatter, Display, Result}, io::{stdout, stdin, Write}};
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::io::{Stdin, Stdout};
 use std::iter::{Enumerate, Peekable};
 use std::process::exit;
 use std::str::Chars;
 use ansi_term::Colour;
-use termion::color;
-use termion::event::{Event, Key, MouseEvent};
-use termion::input::{Events, MouseTerminal, TermRead};
-use termion::raw::{IntoRawMode, RawTerminal};
-use termion::cursor::DetectCursorPos;
+use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, cursor::DetectCursorPos};
 use crate::Error::{IOError, KeyError, SyntaxError, ValueError};
+use std::env;
+use std::path::Path;
 
 static QUIT: bool = false;
+
 
 #[derive(Debug)]
 enum CommandKind {
@@ -43,7 +41,9 @@ impl Command {
                         SyntaxError(err.clone().text, err.loc, format!("expected 2 arguments for calc found {}", self.args.len())).show()
                     }
                     [] => {
-                        let mut interactive_terminal = InTerminal::new();
+                        print!("product > ");
+                        stdout().flush().expect("IOError could not flush stdout");
+                        let mut interactive_terminal = InTerminal::new(11);
                         interactive_terminal.start_session(data);
                     }
                 }
@@ -347,20 +347,30 @@ impl <Char: Iterator<Item=char>> Lexer<Char> {
     }
 }
 
-fn match_input (input: String, data: &ProductList) -> Option<ProductKind> {
-    if input == "" { return None}
-    for product in data.clone().list {
-        if product.kind.name.starts_with(&input) {
-            return Some(product.kind)
-        }
-    }
-    for product in data.clone().list {
-        if product.kind.name.contains(&input) {
-            return Some(product.kind)
-        }
-    }
-    return None
+#[allow(dead_code)]
+struct MatchInput {
+    index: usize,
+    data: ProductList,
 }
+
+impl MatchInput {
+    fn find (&self, input: String) -> Option<(ProductKind, usize)> {
+        if input == "" { return None}
+        let mut return_vec = vec![];
+        for product in self.data.clone().list {
+            if product.kind.name.starts_with(&input) {
+                return_vec.push((product.kind, 0))
+            }
+        }
+        for product in self.data.clone().list {
+            if let Some(index) = product.kind.name.find(&input) {
+                return Some((product.kind, index))
+            }
+        }
+        return None
+    }
+}
+
 
 fn generate_result(node: Node, data: &ProductList) -> Vec<Node> {
     let mut result_vec = vec![];
@@ -495,12 +505,13 @@ fn new_product_time () -> f32 {
 
 struct InTerminal {
     input: String,
+    offset: usize,
     is_running: bool,
 }
 
 impl InTerminal {
-    fn new() -> Self {
-        return InTerminal { input: "".to_string(), is_running: false }
+    fn new(offset: usize) -> Self {
+        return InTerminal { input: "".to_string(), offset, is_running: false }
     }
     fn start_session(&mut self, data: &ProductList) {
         fn parse_terminal() -> Option<Key> {
@@ -517,7 +528,7 @@ impl InTerminal {
             }
             return None
         }
-
+        let in_match = MatchInput {index: 0, data: data.clone()};
         self.is_running = true;
         while self.is_running {
             let key = parse_terminal();
@@ -527,10 +538,10 @@ impl InTerminal {
                     if self.input.is_empty() {}
                     else { self.input.remove(self.input.len() - 1); }
                 }
-                Some(Key::Char('\n')) => { break }
+                Some(Key::Char('\n')) => { self.is_running = false }
                 Some(Key::Char('\t')) => {
-                    self.input = match match_input(self.input.clone(), data) {
-                        Some(pkind) => {pkind.name}
+                    self.input = match in_match.find(self.input.clone()) {
+                        Some((pkind, _)) => {pkind.name}
                         None => self.input.clone()
                     }
                 }
@@ -547,19 +558,23 @@ impl InTerminal {
                     break
                 }
             };
-            match match_input(self.input.clone(), data) {
-                Some(pkind) => {
+            match in_match.find(self.input.clone()) {
+                Some((pkind, index)) => {
                     print!(
                         "{}{}{}{}",
-                        termion::cursor::Goto(1, y),
+                        termion::cursor::Goto(self.offset as u16, y),
                         color::Fg(color::Rgb(0x77, 0x77, 0x77)),
                         termion::clear::AfterCursor,
                         pkind
-                    )
+                    );
+                    print!("{}{}{}{}", termion::cursor::Goto((index + self.offset) as u16, y), color::Fg(color::Green), self.input, color::Fg(color::Reset));
                 }
-                None => { print!("{}{}", termion::cursor::Goto(1, y), termion::clear::AfterCursor) }
-            }
-            print!("{}{}{}{}", termion::cursor::Goto(1, y), color::Fg(color::Green), self.input, color::Fg(color::Reset));
+                None if self.input == "" => { print!("{}{}", termion::cursor::Goto(self.offset as u16, y), termion::clear::AfterCursor) }
+                None => {
+                    print!("{}{}", termion::cursor::Goto(self.offset as u16, y), termion::clear::AfterCursor);
+                    print!("{}{}{}{}", termion::cursor::Goto((self.offset) as u16, y), color::Fg(color::Red), self.input, color::Fg(color::Reset));
+                }
+            };
             stdout.flush().unwrap();
         }
     }
@@ -592,6 +607,11 @@ fn new_product_recipe_dialog() -> Option<(String, i8)> {
 }
 
 fn main() {
+    let path = Path::new("/home/p3rtang/IdeaProjects/fact_calculator_rust");
+    env::set_current_dir(path).expect("TODO: panic message");
+    let path = env::current_dir();
+    println!("The current directory is {:?}", path);
+
     let data = parse_file("products.csv");
     // print!("{:?}", data);
     println!("------------------------------------------------------");
