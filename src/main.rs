@@ -41,10 +41,24 @@ impl Command {
                         SyntaxError(err.clone().text, err.loc, format!("expected 2 arguments for calc found {}", self.args.len())).show()
                     }
                     [] => {
-                        print!("product > ");
+                        let prefix = "product >> ";
+                        print!("{}", prefix);
                         stdout().flush().expect("IOError could not flush stdout");
-                        let mut interactive_terminal = InTerminal::new(11);
+                        let mut interactive_terminal = InTerminal::new(prefix.len() + 1);
                         interactive_terminal.start_session(data);
+                        let product = interactive_terminal.input;
+                        let mut amount = String::new();
+
+                        print!("\namount  >> ");
+                        stdout().flush().expect("IOError could not flush stdout");
+                        stdin().read_line(&mut amount).expect("IOError could not read stdin");
+                        let parse_amount = match amount.replace('\n', "").parse::<f32>() {
+                            Ok(out) => out,
+                            Err(_) => { ValueError(amount, 9, format!("Could not interpret this as a number defaulting to 1.0")).show(); 1.0 }
+                        };
+                        let node = Node { product_kind: ProductKind { name: product }, amount: parse_amount };
+                        let tree = Tree::new(node, 0, data);
+                        tree.traverse()
                     }
                 }
             },
