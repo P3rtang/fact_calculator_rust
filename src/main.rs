@@ -7,8 +7,6 @@ use std::str::Chars;
 use ansi_term::Colour;
 use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, cursor::DetectCursorPos};
 use crate::Error::{IOError, KeyError, SyntaxError, ValueError};
-use std::env;
-use std::path::Path;
 
 static QUIT: bool = false;
 
@@ -52,7 +50,7 @@ impl Command {
                         print!("\namount  >> ");
                         stdout().flush().expect("IOError could not flush stdout");
                         stdin().read_line(&mut amount).expect("IOError could not read stdin");
-                        let parse_amount = match amount.replace('\n', "").parse::<f32>() {
+                        let parse_amount = match amount.clone().drain(..(amount.len() - 1)).as_str().parse::<f32>() {
                             Ok(out) => out,
                             Err(_) => { ValueError(amount, 9, format!("Could not interpret this as a number defaulting to 1.0")).show(); 1.0 }
                         };
@@ -248,6 +246,9 @@ impl ProductList {
         }
         return None
     }
+    fn get(&self, index: usize) -> &Product {
+        return self.list.get(index).unwrap()
+    }
     fn contains(&self, product_kind: &ProductKind) -> bool {
         return self.get_product(product_kind) != None
     }
@@ -274,8 +275,12 @@ struct Tree {
 
 impl Display for Tree {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        let indentation = "\t".repeat(self.indent as usize);
-        write!(f, "{}{}", indentation, self.parent)
+        if self.indent > 0 {
+            let indentation = "    ".repeat(self.indent - 1 as usize);
+            write!(f, "{}|___{}", indentation, self.parent)
+        } else {
+            write!(f, "{}", self.parent)
+        }
     }
 }
 
@@ -364,24 +369,55 @@ impl <Char: Iterator<Item=char>> Lexer<Char> {
 #[allow(dead_code)]
 struct MatchInput {
     index: usize,
-    data: ProductList,
+    match_index_list: Vec<usize>,
 }
 
 impl MatchInput {
-    fn find (&self, input: String) -> Option<(ProductKind, usize)> {
+    fn new(data: &ProductList) -> Self {
+        return MatchInput{index: 0, match_index_list: Vec::new()}
+    }
+    fn find (&mut self, input: String, data: &ProductList) -> Option<(ProductKind, usize)> {
         if input == "" { return None}
-        let mut return_vec = vec![];
-        for product in self.data.clone().list {
+        let selected_prod = data.get(self.index);
+        if let Some(place) = selected_prod.clone().kind.name.find(&input) {
+            return Some((selected_prod.kind.clone(), place))
+        } else {
+            self.is_beginning = true
+        }
+
+        for (prod_index, product) in data.clone().list.into_iter().enumerate() {
             if product.kind.name.starts_with(&input) {
-                return_vec.push((product.kind, 0))
+                self.index = prod_index;
+                return Some((product.kind, 0))
             }
         }
-        for product in self.data.clone().list {
-            if let Some(index) = product.kind.name.find(&input) {
-                return Some((product.kind, index))
+        for product in data.clone().list {
+            if let Some(place) = product.kind.name.find(&input) {
+                return Some((product.kind, place))
             }
         }
         return None
+    }
+    fn next (&mut self, input: String, data: &ProductList) {
+        let mut array = data.clone().list[self.index..].to_owned();
+
+        for (prod_index, product) in array.clone().into_iter().enumerate() {
+            if product.kind.name.starts_with(&input) {
+                self.is_beginning = true;
+                self.index = prod_index;
+            }
+        }
+        if self.is_beginning {
+            self.is_beginning = false;
+            array = data.clone().list
+        }
+        for (prod_index, product) in array.into_iter().enumerate() {
+            if let Some(_) = product.kind.name.find(&input) {
+                self.index = prod_index
+            }
+        }
+        self.index = 0;
+        self.is_beginning = true
     }
 }
 
@@ -542,7 +578,7 @@ impl InTerminal {
             }
             return None
         }
-        let in_match = MatchInput {index: 0, data: data.clone()};
+        let mut in_match = MatchInput::new();
         self.is_running = true;
         while self.is_running {
             let key = parse_terminal();
@@ -554,11 +590,12 @@ impl InTerminal {
                 }
                 Some(Key::Char('\n')) => { self.is_running = false }
                 Some(Key::Char('\t')) => {
-                    self.input = match in_match.find(self.input.clone()) {
+                    self.input = match in_match.find(self.input.clone(), data) {
                         Some((pkind, _)) => {pkind.name}
                         None => self.input.clone()
                     }
                 }
+                Some(Key::Down) => { in_match.next(self.input.clone(), data) }
                 Some(Key::Char(char)) => {
                     self.input.push(char)
                 }
@@ -572,7 +609,7 @@ impl InTerminal {
                     break
                 }
             };
-            match in_match.find(self.input.clone()) {
+            match in_match.find(self.input.clone(), data) {
                 Some((pkind, index)) => {
                     print!(
                         "{}{}{}{}",
@@ -621,16 +658,12 @@ fn new_product_recipe_dialog() -> Option<(String, i8)> {
 }
 
 fn main() {
-    let path = Path::new("/home/p3rtang/IdeaProjects/fact_calculator_rust");
-    env::set_current_dir(path).expect("TODO: panic message");
-    let path = env::current_dir();
-    println!("The current directory is {:?}", path);
-
     let data = parse_file("products.csv");
     // print!("{:?}", data);
     println!("------------------------------------------------------");
-    println!("Give name of the product and amount separated by ':'\nexample: 'Calc green_circuit: 10'");
-    println!("or use the Calc command without arguments to get a guided calculation");
+    println!("Use the Calc command without arguments to get a guided calculation");
+    println!("or give the name of the product and amount separated by a space");
+    println!("example: 'calc green_circuit 10'");
     println!("------------------------------------------------------");
     while !QUIT {
         let mut io_input = String::new();
