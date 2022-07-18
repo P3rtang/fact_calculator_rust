@@ -1,6 +1,5 @@
 use std::{fs, fmt::{Formatter, Display, Result}, io::{stdout, stdin, Write}};
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::iter::{Enumerate, Peekable};
 use std::process::exit;
 use std::str::Chars;
@@ -25,7 +24,7 @@ struct Command {
 }
 
 impl Command {
-    fn run(&self, data: &ProductList) {
+    fn run(&self, data: &mut ProductList) {
         match &self.kind {
             CommandKind::Help    => println!("{}", self),
             CommandKind::Calc    => {
@@ -39,10 +38,8 @@ impl Command {
                         SyntaxError(err.clone().text, err.loc, format!("expected 2 arguments for calc found {}", self.args.len())).show()
                     }
                     [] => {
-                        let prefix = "product >> ";
-                        print!("{}", prefix);
-                        stdout().flush().expect("IOError could not flush stdout");
-                        let mut interactive_terminal = InTerminal::new(prefix.len() + 1);
+                        // TODO: add an error for unknown products
+                        let mut interactive_terminal = InTerminal::new(format!("product >> "));
                         interactive_terminal.start_session(data);
                         let product = interactive_terminal.input;
                         let mut amount = String::new();
@@ -62,22 +59,64 @@ impl Command {
             },
             CommandKind::List    => print!("{}", data),
             CommandKind::New     => {
-                let mut recipe = Vec::new();
-                let info = (new_product_amount(), new_product_time());
+                match &self.args[..] {
+                    [token, amount, time,..] => {
+                        let mut recipe = Vec::new();
+                        let info = (amount.text.parse::<i8>().unwrap(), time.text.parse::<f32>().unwrap());
 
-                while let Some(input) = new_product_recipe_dialog() {
-                    let rec_part = RecipePart { kind: ProductKind { name: input.0.clone() }, amount: input.1.clone() };
-                    if data.contains(&rec_part.kind) {
-                        recipe.push(rec_part)
-                    } else {
-                        ValueError(input.0.clone(), input.1 as usize + 8, format!("The given subproduct {} is not defined", input.0)).show();
+                        while let Some(input) = new_product_recipe_dialog() {
+                            let rec_part = RecipePart { kind: ProductKind { name: input.0.clone() }, amount: input.1.clone() };
+                            if data.contains(&rec_part.kind) {
+                                recipe.push(rec_part)
+                            } else {
+                                ValueError(input.0.clone(), input.1 as usize + 8, format!("The given subproduct {} is not defined", input.0)).show();
+                            }
+                        }
+                        println!("\nAdding product:\n \t{} [production amount:: {}, production time:: {}]", token.text, info.0, info.1);
+                        for part in recipe {
+                            println!("Adding recipe:\n{}", part)
+                        }
+                    }
+                    [token, ..] => {
+                        SyntaxError(token.clone().text, token.loc, format!("Incorrect use of the `new` command")).show()
+                    }
+
+                    [] => {
+                        let new_product = Self::new_interactive_session(data);
+                        println!("{:?}", new_product);
+                        data.add(new_product)
                     }
                 }
-                println!("\nAdding product:\n \t{} [production amount:: {}, production time:: {}]", self.args[0].text, info.0, info.1);
-                for part in recipe {
-                   println!("Adding recipe:\n{}", part)
-                }
             }
+        }
+    }
+    fn new_interactive_session(data: &ProductList) -> Product {
+        let name   = get_input    ("             name >> ".to_string(), true);
+        let time   = get_input_f32("  production_time >> ".to_string());
+        let amount = get_input_i16("production amount >> ".to_string()) as i8;
+
+        println!("recipe parts: ");
+
+        let mut recipe_products = vec![];
+        let mut part_num = 1;
+        let mut interactive_terminal = InTerminal::new(format!("Part {} >> ", part_num));
+        interactive_terminal.start_session(data);
+
+        let mut product_name = interactive_terminal.input.clone();
+        while product_name != "" {
+            part_num += 1;
+            interactive_terminal.reset(format!("Part {} >> ", part_num));
+            let req_amount = get_input_i16(format!("\ncost >> ")) as i8;
+            recipe_products.push( RecipePart { kind: ProductKind { name: product_name }, amount: req_amount } );
+            interactive_terminal.start_session(data);
+            product_name = interactive_terminal.input.clone();
+        }
+
+        return Product {
+            kind: ProductKind { name },
+            time,
+            amount,
+            recipe_products,
         }
     }
 }
@@ -90,7 +129,6 @@ impl Display for Command {
         }
     }
 }
-
 
 #[derive(Debug)]
 enum Error {
@@ -134,6 +172,7 @@ impl Display for Error {
     }
 }
 
+#[derive(Clone, Debug)]
 struct RecipePart {
     kind: ProductKind,
     amount: i8,
@@ -144,13 +183,25 @@ impl Display for RecipePart {
         writeln!(f, "\t{}: {}", self.kind, self.amount)
     }
 }
+
+impl RecipePart {
+    fn parse_recipe(recipe_list: &[&str]) -> Vec<Self> {
+        let mut return_map = vec![];
+        for sub in recipe_list {
+            let sub_vec = sub.split(':').collect::<Vec<&str>>();
+            return_map.push(RecipePart { kind: ProductKind::new(sub_vec[0].to_string()), amount: sub_vec[1].parse().unwrap() });
+        }
+        return return_map
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct Product {
     kind: ProductKind,
     time: f32,
     amount: i8,
-    recipe_products: HashMap<ProductKind, i8>,
+    recipe_products: Vec<RecipePart>,
 }
 
 impl PartialEq<Product> for Product {
@@ -185,7 +236,7 @@ impl Ord for Product {
 }
 
 impl Product {
-    fn new(kind: ProductKind, time: f32, amount: i8, recipe_products: HashMap<ProductKind, i8>) -> Product {
+    fn new(kind: ProductKind, time: f32, amount: i8, recipe_products: Vec<RecipePart>) -> Product {
         let product = Product{ kind, time, amount, recipe_products};
         product
     }
@@ -252,6 +303,9 @@ impl ProductList {
     }
     fn contains(&self, product_kind: &ProductKind) -> bool {
         return self.get_product(product_kind) != None
+    }
+    fn add(&mut self, product: Product) {
+        self.list.push(product)
     }
 }
 
@@ -380,6 +434,7 @@ impl MatchInput {
     fn find (&mut self, input: String, data: &ProductList) -> Option<(ProductKind, usize)> {
         if input == "" { return None}
         let mut temp_index = self.index;
+        // TODO: factor out these two loops into 1 function
         for product in data.clone().list.into_iter() {
             if product.kind.name.starts_with(&input) {
                 if temp_index > 0 { temp_index -= 1 }
@@ -404,6 +459,47 @@ impl MatchInput {
     }
 }
 
+fn get_input(input_hint: String, strip_nl: bool) -> String {
+    let mut input = String::new();
+
+    print!("{}", input_hint);
+    stdout().flush().expect("IOError could not flush stdout");
+    stdin().read_line(&mut input).expect("IOError could not read stdin");
+
+    if strip_nl && input.len() > 1 {
+        input.drain((input.len() - 1)..);
+    }
+
+    return input
+}
+
+fn get_input_f32(input_hint: String) -> f32 {
+    let mut float = String::new();
+
+    print!("{}", input_hint);
+    stdout().flush().expect("IOError could not flush stdout");
+    stdin().read_line(&mut float).expect("IOError could not read stdin");
+
+    let parsed_f32 = match float.clone().drain(..(float.len() - 1)).as_str().parse::<f32>() {
+        Ok(out) => out,
+        Err(_) => { ValueError(float, 9, format!("Could not interpret this as a number defaulting to 1.0")).show(); 1.0}
+    };
+    return parsed_f32
+}
+
+fn get_input_i16(input_hint: String) -> i16 {
+    let mut int = String::new();
+
+    print!("{}", input_hint);
+    stdout().flush().expect("IOError could not flush stdout");
+    stdin().read_line(&mut int).expect("IOError could not read stdin");
+
+    let parsed_i16 = match int.clone().drain(..(int.len() - 1)).as_str().parse::<i16>() {
+        Ok(out) => out,
+        Err(_) => { ValueError(int, 9, format!("Could not interpret this as a number defaulting to 1")).show(); 1}
+    };
+    return parsed_i16
+}
 
 fn generate_result(node: Node, data: &ProductList) -> Vec<Node> {
     let mut result_vec = vec![];
@@ -413,14 +509,14 @@ fn generate_result(node: Node, data: &ProductList) -> Vec<Node> {
         None => {},
         Some(product) => {
             let scalar = node.amount / product.time;
-            for (product_kind, amount) in product.recipe_products.clone() {
-                let sub_time = data.get_product(&product_kind);
+            for recipe_part in product.recipe_products.clone() {
+                let sub_time = data.get_product(&recipe_part.kind);
                 match sub_time {
                     Some(product) =>
                         result_vec.push(
                             Node {
-                                product_kind,
-                                amount:  scalar * amount as f32 * product.time / product.amount as f32
+                                product_kind: recipe_part.kind,
+                                amount:  scalar * recipe_part.amount as f32 * product.time / product.amount as f32
                             }
                         ),
                     None => {}
@@ -433,15 +529,6 @@ fn generate_result(node: Node, data: &ProductList) -> Vec<Node> {
 }
 
 fn parse_file(filename: &str) -> ProductList{
-
-    fn parse_recipe(recipe_list: &[&str]) -> HashMap<ProductKind, i8> {
-        let mut return_map = HashMap::new();
-        for sub in recipe_list {
-            let sub_vec = sub.split(':').collect::<Vec<&str>>();
-            return_map.insert(ProductKind::new(sub_vec[0].to_string()), sub_vec[1].parse().unwrap());
-        }
-        return return_map
-    }
 
     let mut list = vec![];
 
@@ -457,7 +544,7 @@ fn parse_file(filename: &str) -> ProductList{
                         ProductKind::new(parse_line[0].to_string()),
                         parse_line[1].parse().unwrap(),
                         parse_line[2].parse().unwrap(),
-                        parse_recipe(&parse_line[3..])
+                        RecipePart::parse_recipe(&parse_line[3..])
                     );
                     list.push(p);
                 }
@@ -476,15 +563,6 @@ fn parse_lexer(lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
                     "exit" => exit(0),
                     "new"  => {
                         let args:Vec<Token> = lexer.collect();
-                        if args.len() > 1{
-                            let err = args[1].clone();
-                            SyntaxError(err.text, err.loc, format!("Expected 1 arguments but got {}", args.len())).show();
-                            return None
-                        }
-                        else if args.len() == 0 {
-                            SyntaxError("".to_string(), 4, format!("Expected 1 arguments but got {}", args.len())).show();
-                            return None
-                        }
                         Some(Command { kind:CommandKind::New, args })
                     },
                     "calc" => {
@@ -504,47 +582,21 @@ fn parse_lexer(lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
     } else { None }
 }
 
-fn new_product_amount () -> i8 {
-    let mut amount = String::new();
-
-    print!("amount crafted:: ");
-    stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
-    stdin().read_line(&mut amount).expect("ERROR: Failed to read io::stdin");
-    amount = amount.replace("\n", "");
-    return match amount.parse::<i8>() {
-        Ok(int) => { int }
-        Err(_) => {
-            ValueError(amount, 15, format!("Expected a number")).show();
-            new_product_amount()
-        }
-    }
-}
-
-fn new_product_time () -> f32 {
-    let mut time = String::new();
-
-    print!("time needed:: ");
-    stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
-    stdin().read_line(&mut time).expect("ERROR: Failed to read io::stdin");
-    time = time.replace("\n", "");
-    return match time.parse::<f32>() {
-        Ok(float) => { float }
-        Err(_) => {
-            ValueError(time, 8, format!("Expected a number")).show();
-            new_product_time()
-        }
-    }
-}
-
 struct InTerminal {
     input: String,
     offset: usize,
+    offset_text: String,
     is_running: bool,
 }
 
 impl InTerminal {
-    fn new(offset: usize) -> Self {
-        return InTerminal { input: "".to_string(), offset, is_running: false }
+    fn new(offset_text: String) -> Self {
+        return InTerminal { input: "".to_string(), offset: offset_text.len() + 1, offset_text, is_running: false }
+    }
+    fn reset(&mut self, new_text: String) {
+        self.input       = "".to_string();
+        self.offset      = new_text.len() + 1;
+        self.offset_text = new_text;
     }
     fn start_session(&mut self, data: &ProductList) {
         fn parse_terminal() -> Option<Key> {
@@ -563,6 +615,8 @@ impl InTerminal {
         }
         let mut in_match = MatchInput::new();
         self.is_running = true;
+        print!("{}", self.offset_text);
+        stdout().flush().expect("IOError could not flush stdout");
         while self.is_running {
             let key = parse_terminal();
 
@@ -618,7 +672,8 @@ impl InTerminal {
 
 fn new_product_recipe_dialog() -> Option<(String, i8)> {
     let mut io_input = String::new();
-    print!("recipe part:: ");
+    println!("recipe part:: ");
+    print!("product >>");
     stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
     stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
     let mut lexer = Lexer::new(io_input.clone(), io_input.chars());
@@ -643,7 +698,7 @@ fn new_product_recipe_dialog() -> Option<(String, i8)> {
 }
 
 fn main() {
-    let data = parse_file("products.csv");
+    let mut data = parse_file("products.csv");
     // print!("{:?}", data);
     println!("------------------------------------------------------");
     println!("Use the Calc command without arguments to get a guided calculation");
@@ -656,6 +711,6 @@ fn main() {
         stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
         stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
         let mut lexer = Lexer::new(io_input.clone(), io_input.chars());
-        if let Some(command) = parse_lexer(&mut lexer) { command.run(&data) } else {};
+        if let Some(command) = parse_lexer(&mut lexer) { command.run(&mut data) } else {};
     }
 }

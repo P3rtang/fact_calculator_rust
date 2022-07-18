@@ -3,7 +3,7 @@ copper_wire,0.5,2,copper_plate:1
 stone_plate,0.125,1
 small_electric_motor,0.8,1,copper_wire:6,iron_gear_wheel:1,iron_plate:1
 iron_gear_wheel,0.5,1,iron_plate:2
-iron_plate,1,1
+iron_plate,3.2,1
 red_science,5,1,iron_gear_wheel:1,copper_plate:1
 copper_plate,3.2,1
 inserter,0.5,1,burner_inserter:1,small_electric_motor:1
