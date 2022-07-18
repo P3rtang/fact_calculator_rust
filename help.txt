@@ -1,9 +1,15 @@
-Factorio Calculator:
-Help page:
+Factorio Calculator Help page:
 
-- possible commands:
+- Help Syntax
+    []: optional arguments
+    <>: mandatory arguments
+     *: interactive terminal session available (run without arguments to enter)
+
+- Commands:
     · Help: show this page
-    · List: shows a page with all possible products
-    · Calc: [WIP] will help with string input
-    · Save: [WIP] will save any added products to a csv
-    · Exit: save and exits the program
+    · List [search]: show a list with all possible products (that contain the optional search)
+    ·*Calc [product <amount>]: Calculate the needed subproducts for the given product and amount
+                               or just use Calc to get an interactive terminal session
+    ·*New  [product <time> <amount>]: Add a new product
+    · Save: TODO: not implemented yet
+    · Exit: exits the program
