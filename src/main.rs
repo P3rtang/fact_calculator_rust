@@ -237,6 +237,7 @@ impl Display for ProductList {
     }
 }
 
+#[allow(dead_code)]
 impl ProductList {
     fn get_product(&self, product_kind: &ProductKind) -> Option<&Product> {
         for p in &self.list {
@@ -277,7 +278,7 @@ impl Display for Tree {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         if self.indent > 0 {
             let indentation = "    ".repeat(self.indent - 1 as usize);
-            write!(f, "{}|___{}", indentation, self.parent)
+            write!(f, "{}    {}", indentation, self.parent)
         } else {
             write!(f, "{}", self.parent)
         }
@@ -373,51 +374,33 @@ struct MatchInput {
 }
 
 impl MatchInput {
-    fn new(data: &ProductList) -> Self {
+    fn new() -> Self {
         return MatchInput{index: 0, match_index_list: Vec::new()}
     }
     fn find (&mut self, input: String, data: &ProductList) -> Option<(ProductKind, usize)> {
         if input == "" { return None}
-        let selected_prod = data.get(self.index);
-        if let Some(place) = selected_prod.clone().kind.name.find(&input) {
-            return Some((selected_prod.kind.clone(), place))
-        } else {
-            self.is_beginning = true
-        }
-
-        for (prod_index, product) in data.clone().list.into_iter().enumerate() {
+        let mut temp_index = self.index;
+        for product in data.clone().list.into_iter() {
             if product.kind.name.starts_with(&input) {
-                self.index = prod_index;
-                return Some((product.kind, 0))
+                if temp_index > 0 { temp_index -= 1 }
+                else { return Some((product.kind, 0)) }
             }
         }
         for product in data.clone().list {
             if let Some(place) = product.kind.name.find(&input) {
-                return Some((product.kind, place))
+                if !(product.kind.name.starts_with(&input)) {
+                    if temp_index > 0 { temp_index -= 1 }
+                    else { return Some((product.kind, place)) }
+                }
             }
+        }
+        if temp_index > 0 {
+            self.index = 0;
+            return self.find(input, data)
         }
         return None
     }
-    fn next (&mut self, input: String, data: &ProductList) {
-        let mut array = data.clone().list[self.index..].to_owned();
-
-        for (prod_index, product) in array.clone().into_iter().enumerate() {
-            if product.kind.name.starts_with(&input) {
-                self.is_beginning = true;
-                self.index = prod_index;
-            }
-        }
-        if self.is_beginning {
-            self.is_beginning = false;
-            array = data.clone().list
-        }
-        for (prod_index, product) in array.into_iter().enumerate() {
-            if let Some(_) = product.kind.name.find(&input) {
-                self.index = prod_index
-            }
-        }
-        self.index = 0;
-        self.is_beginning = true
+    fn _next (&mut self, _input: String, _data: &ProductList) {
     }
 }
 
@@ -593,9 +576,11 @@ impl InTerminal {
                     self.input = match in_match.find(self.input.clone(), data) {
                         Some((pkind, _)) => {pkind.name}
                         None => self.input.clone()
-                    }
+                    };
+                    in_match.index = 0;
                 }
-                Some(Key::Down) => { in_match.next(self.input.clone(), data) }
+                Some(Key::Up)   => { if in_match.index > 0 { in_match.index -= 1 } }
+                Some(Key::Down) => { in_match.index += 1 }
                 Some(Key::Char(char)) => {
                     self.input.push(char)
                 }
