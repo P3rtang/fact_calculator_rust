@@ -1,5 +1,6 @@
 use std::{fs, fmt::{Formatter, Display, Result}, io::{stdout, stdin, Write}};
 use std::cmp::Ordering;
+use std::fs::OpenOptions;
 use std::iter::{Enumerate, Peekable};
 use std::process::exit;
 use std::str::Chars;
@@ -84,7 +85,8 @@ impl Command {
                     [] => {
                         let new_product = Self::new_interactive_session(data);
                         println!("{:?}", new_product);
-                        data.add(new_product)
+                        data.add(new_product.clone());
+                        save_product_to_file(new_product, "products.csv".to_string())
                     }
                 }
             }
@@ -180,7 +182,7 @@ struct RecipePart {
 
 impl Display for RecipePart {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        writeln!(f, "\t{}: {}", self.kind, self.amount)
+        writeln!(f, "{}:{}", self.kind, self.amount)
     }
 }
 
@@ -501,6 +503,21 @@ fn get_input_i16(input_hint: String) -> i16 {
     return parsed_i16
 }
 
+fn save_product_to_file(product: Product, file: String) {
+    let mut line = format!("{},{},{},", product.kind.name, product.time, product.amount);
+    for rec_part in product.recipe_products {
+        line.push_str(&format!("{}", rec_part))
+    }
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(file)
+        .unwrap();
+
+    if let Err(e) = writeln!(file, "{}", line) {
+        eprintln!("Couldn't write to file: {}", e);
+    }
+}
+
 fn generate_result(node: Node, data: &ProductList) -> Vec<Node> {
     let mut result_vec = vec![];
     // scalar references items per second
@@ -524,7 +541,6 @@ fn generate_result(node: Node, data: &ProductList) -> Vec<Node> {
             }
         }
     }
-
     result_vec
 }
 
