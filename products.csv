@@ -1,3 +1,4 @@
+# product, time, amount, recipe
 green_circuit,1.3,1,copper_wire:3,stone_plate:1
 copper_wire,0.5,2,copper_plate:1
 stone_plate,0.125,1
@@ -10,10 +11,9 @@ inserter,0.5,1,burner_inserter:1,small_electric_motor:1
 burner_inserter,0.5,1,iron_stick:2,single_c_engine:1
 iron_stick,0.5,1,iron_plate:1
 single_c_engine,0.6,1,iron_gear_wheel:1,iron_plate:1
-green_science,10,2,inserter:1,transport_belt:2
+green_science,10,1,inserter:1,transport_belt:2
 transport_belt,0.25,1,single_c_engine:1,iron_plate:1
 stone,1,1
 glass,4,1,sand:4
 steel,16,1,iron_plate:5
 sand,0.5,2,stone:1
-glass,4,1,sand:4

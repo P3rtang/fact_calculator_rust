@@ -552,7 +552,7 @@ fn generate_result(node: Node, data: &ProductList) -> Vec<Node> {
 }
 
 fn parse_file(filename: &str) -> ProductList{
-
+    // TODO: report duplicate entries
     let mut list = vec![];
 
     let file = fs::read_to_string(filename)
