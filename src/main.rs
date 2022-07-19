@@ -17,6 +17,8 @@ enum CommandKind {
     Calc,
     List,
     New,
+    // TODO: add edit command
+    // TODO: add set command (for basic settings like smelter speed)
 }
 
 struct Command {
@@ -203,6 +205,7 @@ struct Product {
     kind: ProductKind,
     time: f32,
     amount: i8,
+    // TODO: add production type (eg. smelter, factory, ...)
     recipe_products: Vec<RecipePart>,
 }
 
@@ -359,6 +362,8 @@ impl Tree {
             node.traverse()
         }
     }
+    // TODO: make tree output interactive with tabs
+    // TODO: add search function to tree to get the accumulated value for a certain product
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -504,16 +509,16 @@ fn get_input_i16(input_hint: String) -> i16 {
 }
 
 fn save_product_to_file(product: Product, file: String) {
-    let mut line = format!("{},{},{},", product.kind.name, product.time, product.amount);
+    let mut line = format!("{},{},{}", product.kind.name, product.time, product.amount);
     for rec_part in product.recipe_products {
-        line.push_str(&format!("{}", rec_part))
+        line.push_str(&format!(",{}", rec_part))
     }
     let mut file = OpenOptions::new()
         .append(true)
         .open(file)
         .unwrap();
 
-    if let Err(e) = writeln!(file, "{}", line) {
+    if let Err(e) = write!(file, "{}", line) {
         eprintln!("Couldn't write to file: {}", e);
     }
 }
@@ -525,17 +530,19 @@ fn generate_result(node: Node, data: &ProductList) -> Vec<Node> {
     match sub {
         None => {},
         Some(product) => {
-            let scalar = node.amount / product.time;
+            let scalar = node.amount / product.time as f32;
             for recipe_part in product.recipe_products.clone() {
                 let sub_time = data.get_product(&recipe_part.kind);
                 match sub_time {
-                    Some(product) =>
+                    Some(sub_product) => {
+                        println!("{:?}", sub_product);
                         result_vec.push(
                             Node {
                                 product_kind: recipe_part.kind,
-                                amount:  scalar * recipe_part.amount as f32 * product.time / product.amount as f32
+                                amount: scalar as f32 * recipe_part.amount as f32 * (sub_product.time / (sub_product.amount as f32)),
                             }
-                        ),
+                        )
+                    },
                     None => {}
                 }
             }
@@ -562,13 +569,13 @@ fn parse_file(filename: &str) -> ProductList{
                         parse_line[2].parse().unwrap(),
                         RecipePart::parse_recipe(&parse_line[3..])
                     );
-                    list.push(p);
+                    list.push(p)
                 }
                 else {}
             }
         }
     }
-    return ProductList { list };
+    return ProductList { list }
 }
 
 fn parse_lexer(lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
