@@ -6,7 +6,7 @@ use std::process::exit;
 use std::str::Chars;
 use ansi_term::Colour;
 use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, cursor::DetectCursorPos};
-use crate::Error::{IOError, KeyError, SyntaxError, ValueError};
+use crate::Error::{InputError, IOError, KeyError, SyntaxError, ValueError};
 
 static QUIT: bool = false;
 
@@ -17,13 +17,13 @@ enum CommandKind {
     Calc,
     List,
     New,
-    // TODO: add edit command
+    Edit,
     // TODO: add set command (for basic settings like smelter speed)
 }
 
 struct Command {
     kind: CommandKind,
-    args: Vec<Token>
+    args: Vec<Token>,
 }
 
 impl Command {
@@ -42,8 +42,8 @@ impl Command {
                     }
                     [] => {
                         // TODO: add an error for unknown products
-                        let mut interactive_terminal = InTerminal::new(format!("product >> "));
-                        interactive_terminal.start_session(data);
+                        let mut interactive_terminal = InteractiveProductTerm::new(format!("product >> "), data);
+                        interactive_terminal.start_session();
                         let product = interactive_terminal.input;
                         let mut amount = String::new();
 
@@ -92,6 +92,10 @@ impl Command {
                     }
                 }
             }
+            CommandKind::Edit => {
+                let _edit_product = Self::edit_interactive_session(data);
+                todo!("Edit not implemented yet")
+            }
         }
     }
     fn new_interactive_session(data: &ProductList) -> Product {
@@ -103,8 +107,8 @@ impl Command {
 
         let mut recipe_products = vec![];
         let mut part_num = 1;
-        let mut interactive_terminal = InTerminal::new(format!("Part {} >> ", part_num));
-        interactive_terminal.start_session(data);
+        let mut interactive_terminal = InteractiveProductTerm::new(format!("Part {} >> ", part_num), data);
+        interactive_terminal.start_session();
 
         let mut product_name = interactive_terminal.input.clone();
         while product_name != "" {
@@ -112,7 +116,7 @@ impl Command {
             interactive_terminal.reset(format!("Part {} >> ", part_num));
             let req_amount = get_input_i16(format!("\ncost >> ")) as i8;
             recipe_products.push( RecipePart { kind: ProductKind { name: product_name }, amount: req_amount } );
-            interactive_terminal.start_session(data);
+            interactive_terminal.start_session();
             product_name = interactive_terminal.input.clone();
         }
 
@@ -121,6 +125,32 @@ impl Command {
             time,
             amount,
             recipe_products,
+        }
+    }
+    fn edit_interactive_session(data: &ProductList) -> Product {
+        println!("Select a product to edit");
+
+        let mut interactive_product_session = InteractiveProductTerm::new(format!("product >> "), data);
+        interactive_product_session.start_session();
+        if let Some(product) = interactive_product_session.input_get_product() {
+            let mut session_type = "".to_string();
+            println!("\n(1) Edit the Product");
+            println!("(2) Edit the Recipe");
+            print!("Enter (1) or (2) >> ");
+            stdout().flush().expect("IOError could not flush stdout");
+            stdin().read_line(&mut session_type).expect("IOError could not read stdin");
+            let mut interactive_edit_session = InteractiveEditTerm::new(session_type.replace("\n", ""), product.clone());
+            interactive_edit_session.start_session();
+        } else {
+            println!();
+            InputError( "".to_string(), 9, format!("Could not find {}", interactive_product_session.input)).show()
+        }
+
+        return Product {
+            kind: ProductKind { name: "".to_string() },
+            time: 0.0,
+            amount: 0,
+            recipe_products: vec![]
         }
     }
 }
@@ -140,6 +170,7 @@ enum Error {
     KeyError    (String, usize, String),
     ValueError  (String, usize, String),
     IOError     (String, usize, String),
+    InputError  (String, usize, String),
 }
 
 impl Error {
@@ -153,6 +184,7 @@ impl Error {
             KeyError   (_, _, _) => { eprint!("{}", self) }
             ValueError (_, _, _) => { eprint!("{}", self) }
             IOError    (_, _, _) => { eprint!("{}", self) }
+            InputError (_, _, _) => { eprint!("{}", self) }
         }
     }
 }
@@ -161,16 +193,19 @@ impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
             SyntaxError(_, loc, info) => {
-                writeln!(f, "{}^ SyntaxError: {}", " ".repeat(*loc + 2), info)
+                writeln!(f, "{}^ SyntaxError: {}", " ".repeat(*loc), info)
             }
             KeyError(_, loc, info)    => {
-                writeln!(f, "{}^ KeyError: {}",    " ".repeat(*loc + 2), info)
+                writeln!(f, "{}^ KeyError: {}",    " ".repeat(*loc), info)
             }
             ValueError(_, loc, info)  => {
-                writeln!(f, "{}^ ValueError: {}",  " ".repeat(*loc + 2), info)
+                writeln!(f, "{}^ ValueError: {}",  " ".repeat(*loc), info)
             }
             IOError(_, loc, info)  => {
-                writeln!(f, "{}^ IOError: {}",     " ".repeat(*loc + 2), info)
+                writeln!(f, "{}^ IOError: {}",     " ".repeat(*loc), info)
+            }
+            InputError(_, loc, info)  => {
+                writeln!(f, "{}^ InputError: {}",  " ".repeat(*loc), info)
             }
         }
     }
@@ -438,7 +473,7 @@ impl MatchInput {
     fn new() -> Self {
         return MatchInput{index: 0, match_index_list: Vec::new()}
     }
-    fn find (&mut self, input: String, data: &ProductList) -> Option<(ProductKind, usize)> {
+    fn find (&mut self, input: String, data: Box<ProductList>) -> Option<(ProductKind, usize)> {
         if input == "" { return None}
         let mut temp_index = self.index;
         // TODO: factor out these two loops into 1 function
@@ -594,6 +629,7 @@ fn parse_lexer(lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
                     },
                     "help" => { Some(Command { kind:CommandKind::Help, args: vec![] }) },
                     "list" => { Some(Command { kind:CommandKind::List, args: vec![] }) },
+                    "edit" => { Some(Command { kind:CommandKind::Edit, args: vec![] }) },
                     err => {
                         KeyError(err.to_string(), token.loc, "Unexpected Command use Help for possible commands".to_string()).show();
                         None
@@ -605,23 +641,33 @@ fn parse_lexer(lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
     } else { None }
 }
 
-struct InTerminal {
+struct InteractiveProductTerm {
     input: String,
     offset: usize,
     offset_text: String,
     is_running: bool,
+    search_data: Box<ProductList>
 }
 
-impl InTerminal {
-    fn new(offset_text: String) -> Self {
-        return InTerminal { input: "".to_string(), offset: offset_text.len() + 1, offset_text, is_running: false }
+impl InteractiveProductTerm {
+    fn new(offset_text: String, data: &ProductList) -> Self {
+        return InteractiveProductTerm {
+            input: "".to_string(),
+            offset: offset_text.len() + 1,
+            offset_text,
+            is_running: false,
+            search_data: Box::new(data.clone())
+        }
     }
     fn reset(&mut self, new_text: String) {
         self.input       = "".to_string();
         self.offset      = new_text.len() + 1;
         self.offset_text = new_text;
     }
-    fn start_session(&mut self, data: &ProductList) {
+    fn input_get_product(&self) -> Option<&Product> {
+        self.search_data.get_product( &ProductKind { name: self.input.clone() } )
+    }
+    fn start_session(&mut self) {
         fn parse_terminal() -> Option<Key> {
             let stdin = stdin();
             let _stdout = stdout().into_raw_mode().unwrap();
@@ -650,7 +696,7 @@ impl InTerminal {
                 }
                 Some(Key::Char('\n')) => { self.is_running = false }
                 Some(Key::Char('\t')) => {
-                    self.input = match in_match.find(self.input.clone(), data) {
+                    self.input = match in_match.find(self.input.clone(), self.search_data.clone()) {
                         Some((pkind, _)) => {pkind.name}
                         None => self.input.clone()
                     };
@@ -671,7 +717,7 @@ impl InTerminal {
                     break
                 }
             };
-            match in_match.find(self.input.clone(), data) {
+            match in_match.find(self.input.clone(), self.search_data.clone()) {
                 Some((pkind, index)) => {
                     print!(
                         "{}{}{}{}",
@@ -690,6 +736,47 @@ impl InTerminal {
             };
             stdout.flush().unwrap();
         }
+    }
+}
+
+#[allow(dead_code)]
+struct InteractiveEditTerm {
+    header: Vec<String>,
+    values: Vec<String>,
+    edit_product: Product,
+}
+
+impl InteractiveEditTerm {
+    fn new(edit_type: String, product: Product) -> Self {
+        let mut header = vec![];
+        let mut values = vec![];
+        match edit_type.as_str() {
+            "1" => {
+                header = vec!["Name".to_string(), "Time".to_string(), "Amount".to_string()];
+                values = vec![product.kind.name.clone(), product.time.to_string(), product.amount.to_string()];
+            }
+            "2" => {
+                for rec_part in product.recipe_products.clone() {
+                    header.push(rec_part.kind.name);
+                    values.push(rec_part.amount.to_string())
+                }
+            }
+            "" => {
+                header = vec!["Name".to_string(), "Time".to_string(), "Amount".to_string()];
+                values = vec![product.kind.name.clone(), product.time.to_string(), product.amount.to_string()];
+            }
+            rest => {
+                InputError(rest.to_string(), 20, format!("Expected 1 or 2 but got {}", rest)).show();
+            }
+        }
+        return InteractiveEditTerm {
+            header,
+            values,
+            edit_product: product
+        }
+    }
+    fn start_session(&mut self) {
+
     }
 }
 
