@@ -1,11 +1,10 @@
 use std::{fs, fmt::{Formatter, Display, Result}, io::{stdout, stdin, Write}};
-use std::cmp::Ordering;
+use std::cmp::{max, Ordering};
 use std::fs::OpenOptions;
 use std::iter::{Enumerate, Peekable};
 use std::process::exit;
 use std::str::Chars;
-use ansi_term::Colour;
-use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, cursor::DetectCursorPos};
+use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, cursor::{DetectCursorPos, Goto}};
 use crate::Error::{InputError, IOError, KeyError, SyntaxError, ValueError};
 
 static QUIT: bool = false;
@@ -145,7 +144,6 @@ impl Command {
             println!();
             InputError( "".to_string(), 9, format!("Could not find {}", interactive_product_session.input)).show()
         }
-
         return Product {
             kind: ProductKind { name: "".to_string() },
             time: 0.0,
@@ -324,7 +322,7 @@ impl Display for ProductList {
         for key in key_slice {
             display += &format!("{}\n", key.kind)
         }
-        writeln!(f, "{}", Colour::RGB(77, 208, 225).paint(display))
+        writeln!(f, "{}{}{}", color::Fg(color::Cyan), display, color::Fg(color::Reset))
     }
 }
 
@@ -721,17 +719,17 @@ impl InteractiveProductTerm {
                 Some((pkind, index)) => {
                     print!(
                         "{}{}{}{}",
-                        termion::cursor::Goto(self.offset as u16, y),
+                        Goto(self.offset as u16, y),
                         color::Fg(color::Rgb(0x77, 0x77, 0x77)),
                         termion::clear::AfterCursor,
                         pkind
                     );
-                    print!("{}{}{}{}", termion::cursor::Goto((index + self.offset) as u16, y), color::Fg(color::Green), self.input, color::Fg(color::Reset));
+                    print!("{}{}{}{}", Goto((index + self.offset) as u16, y), color::Fg(color::Green), self.input, color::Fg(color::Reset));
                 }
-                None if self.input == "" => { print!("{}{}", termion::cursor::Goto(self.offset as u16, y), termion::clear::AfterCursor) }
+                None if self.input == "" => { print!("{}{}", Goto(self.offset as u16, y), termion::clear::AfterCursor) }
                 None => {
-                    print!("{}{}", termion::cursor::Goto(self.offset as u16, y), termion::clear::AfterCursor);
-                    print!("{}{}{}{}", termion::cursor::Goto((self.offset) as u16, y), color::Fg(color::Red), self.input, color::Fg(color::Reset));
+                    print!("{}{}", Goto(self.offset as u16, y), termion::clear::AfterCursor);
+                    print!("{}{}{}{}", Goto((self.offset) as u16, y), color::Fg(color::Red), self.input, color::Fg(color::Reset));
                 }
             };
             stdout.flush().unwrap();
@@ -776,7 +774,28 @@ impl InteractiveEditTerm {
         }
     }
     fn start_session(&mut self) {
+        println!("\n");
+        let mut width = 0;
+        for head in self.header.clone() {
+            width = max(width, head.len() + 4)
+        }
+        let mut stdout = stdout().into_raw_mode().unwrap();
+        for (index, head) in self.header.clone().into_iter().enumerate() {
+            let value = self.values[index].clone();
 
+            let (_, y) = match stdout.cursor_pos() {
+                Ok(pos) => pos,
+                Err(err) => {
+                    IOError( err.to_string(), 1, format!("Could not locate cursor, reverting to default 1, 1")).show();
+                    break
+                }
+            };
+
+            println!("{}{}{}{}{}{}", Goto(0, y), head, Goto(width as u16, y), color::Fg(color::Green), value, color::Fg(color::Reset))
+        }
+        // TODO: arrow keys select the row you want to change
+        // TODO: changed values should become yellow
+        println!();
     }
 }
 
