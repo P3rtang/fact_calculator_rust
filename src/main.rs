@@ -95,8 +95,10 @@ impl Command {
                     interactive_edit_session.start_session();
                     let edited_product = interactive_edit_session.get_product();
                     println!();
-                    data.remove(product);
-                    data.add(edited_product);
+                    if !interactive_edit_session.escape_pressed {
+                        data.remove(product);
+                        data.add(edited_product);
+                    }
                 } else {
                     println!();
                     InputError("".to_string(), 9, format!("Could not find {}", interactive_product_session.input)).show();
@@ -771,6 +773,7 @@ struct InteractiveEditTerm {
     rows: Vec<EditRow>,
     selected_row: i16,
     is_running: bool,
+    escape_pressed: bool,
 }
 
 impl InteractiveEditTerm {
@@ -805,6 +808,7 @@ impl InteractiveEditTerm {
             rows,
             selected_row: 0,
             is_running: false,
+            escape_pressed: false,
         }
     }
     fn start_session(&mut self) {
@@ -822,10 +826,13 @@ impl InteractiveEditTerm {
 
             match key {
                 Some(Key::Backspace)  => {
-                    current_row.value.remove(current_row.value.len() - 1);
+                    if current_row.value.len() > 0 {
+                        current_row.value.remove(current_row.value.len() - 1);
+                    }
                 }
                 Some(Key::Char('\n')) => {
                     self.is_running = false;
+                    // if any errors are present in the editor set running to true again
                     for row in &self.rows {
                         if row.error {
                             self.is_running = true
@@ -842,11 +849,15 @@ impl InteractiveEditTerm {
                     self.selected_row = (self.selected_row + 1).rem_euclid(rows_len )
                 }
                 Some(Key::Char(char)) => { current_row.value.push(char) }
+                Some(Key::Esc) => {
+                    self.escape_pressed = true;
+                    self.is_running = false;
+                }
                 _ => { break }
             }
         }
-        let terminal_space = "\n".repeat(self.rows.len() - self.selected_row as usize - 2);
-        println!("{}", terminal_space);
+        let terminal_space = "\n".repeat(self.rows.len() - self.selected_row as usize - 1);
+        print!("{}", terminal_space);
     }
     fn get_product(&self) -> Product {
         let mut recipe_products = vec![];
