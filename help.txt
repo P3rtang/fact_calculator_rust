@@ -11,5 +11,6 @@ Factorio Calculator Help page:
     ·*Calc [product <amount>]: Calculate the needed subproducts for the given product and amount
                                or just use Calc to get an interactive terminal session
     ·*New  [product <time> <amount>]: Add a new product
+    ·*Edit: Edit a product
     · Save: TODO: not implemented yet
     · Exit: exits the program

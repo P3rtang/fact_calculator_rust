@@ -1,6 +1,4 @@
-use std::{fs, fmt::{Formatter, Display, Result}, io::{stdout, stdin, Write}, cmp::{max, Ordering}, iter::{Enumerate, Peekable}, process::exit, str::Chars};
-use std::collections::HashMap;
-use std::str::FromStr;
+use std::{fs, fmt::{Formatter, Display, Result}, str::FromStr, io::{stdout, stdin, Write}, cmp::{max, Ordering}, iter::{Enumerate, Peekable}, process::exit, str::Chars, collections::HashMap};
 use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, cursor::{DetectCursorPos, Goto}, clear};
 use crate::Error::{InputError, IOError, KeyError, SyntaxError, ValueError};
 
@@ -778,7 +776,7 @@ struct InteractiveEditTerm {
 impl InteractiveEditTerm {
     fn new(product: Product) -> Self {
         let mut header = vec!["Name".to_string(), "Time".to_string(), "Amount".to_string(), "Machine".to_string()];
-        let mut values = vec![product.kind.name.clone(), product.time.to_string(), product.amount.to_string()];
+        let mut values = vec![product.kind.name.clone(), product.time.to_string(), product.amount.to_string(), product.machine.to_string()];
 
         for rec_part in product.recipe_products.clone() {
             header.push(rec_part.kind.name);
@@ -887,8 +885,10 @@ impl EditRow {
             value_type = 0
         } else if head == "Time" {
             value_type = 1
-        } else {
+        } else if head == "Machine" {
             value_type = 2
+        } else {
+            value_type = 3
         }
         return EditRow { row_index, head: head.clone(), value: value.clone(), value_type, spacing, is_selected: false, error: false }
     }
@@ -913,7 +913,11 @@ impl EditRow {
                 Ok(_)  => self.error = false,
                 Err(_) => self.error = true,
             }
-            2 => match self.value.parse::<f32>() {
+            2 => match self.value.parse::<MachineKind>() {
+                Ok(_)  => self.error = false,
+                Err(_) => self.error = true,
+            },
+            3 => match self.value.parse::<f32>() {
                 Ok(_)  => self.error = false,
                 Err(_) => self.error = true,
             },
@@ -976,9 +980,8 @@ fn main() {
     let (mut data, settings) = parse_file("products.csv");
     // print!("{:?}", data);
     println!("------------------------------------------------------");
-    println!("Use the Calc command without arguments to get a guided calculation");
-    println!("or give the name of the product and amount separated by a space");
-    println!("example: 'calc green_circuit 10'");
+    println!("Type Calc without arguments to get a guided calculation");
+    println!("Type Help to get a list of all possible commands");
     println!("------------------------------------------------------");
     while !QUIT {
         let mut io_input = String::new();
