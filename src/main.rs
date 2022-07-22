@@ -4,7 +4,7 @@ use std::fs::OpenOptions;
 use std::iter::{Enumerate, Peekable};
 use std::process::exit;
 use std::str::Chars;
-use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, cursor::{DetectCursorPos, Goto}};
+use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, cursor::{DetectCursorPos, Goto}, clear};
 use crate::Error::{InputError, IOError, KeyError, SyntaxError, ValueError};
 
 static QUIT: bool = false;
@@ -92,8 +92,22 @@ impl Command {
                 }
             }
             CommandKind::Edit => {
-                let _edit_product = Self::edit_interactive_session(data);
-                todo!("Edit not implemented yet")
+                // TODO: save edited products to the csv
+                println!("Select a product to edit");
+
+                let mut interactive_product_session = InteractiveProductTerm::new(format!("product >> "), data);
+                interactive_product_session.start_session();
+                if let Some(product) = interactive_product_session.input_get_product() {
+                    let mut interactive_edit_session = InteractiveEditTerm::new(product.clone());
+                    interactive_edit_session.start_session();
+                    let edited_product = interactive_edit_session.get_product();
+                    println!();
+                    data.remove(product);
+                    data.add(edited_product);
+                } else {
+                    println!();
+                    InputError("".to_string(), 9, format!("Could not find {}", interactive_product_session.input)).show();
+                }
             }
         }
     }
@@ -124,31 +138,6 @@ impl Command {
             time,
             amount,
             recipe_products,
-        }
-    }
-    fn edit_interactive_session(data: &ProductList) -> Product {
-        println!("Select a product to edit");
-
-        let mut interactive_product_session = InteractiveProductTerm::new(format!("product >> "), data);
-        interactive_product_session.start_session();
-        if let Some(product) = interactive_product_session.input_get_product() {
-            let mut session_type = "".to_string();
-            println!("\n(1) Edit the Product");
-            println!("(2) Edit the Recipe");
-            print!("Enter (1) or (2) >> ");
-            stdout().flush().expect("IOError could not flush stdout");
-            stdin().read_line(&mut session_type).expect("IOError could not read stdin");
-            let mut interactive_edit_session = InteractiveEditTerm::new(session_type.replace("\n", ""), product.clone());
-            interactive_edit_session.start_session();
-        } else {
-            println!();
-            InputError( "".to_string(), 9, format!("Could not find {}", interactive_product_session.input)).show()
-        }
-        return Product {
-            kind: ProductKind { name: "".to_string() },
-            time: 0.0,
-            amount: 0,
-            recipe_products: vec![]
         }
     }
 }
@@ -344,6 +333,15 @@ impl ProductList {
     }
     fn add(&mut self, product: Product) {
         self.list.push(product)
+    }
+    fn remove(&mut self, product: &Product) -> Product {
+        let mut index = 0;
+        for (i, p) in self.list.clone().into_iter().enumerate() {
+            if p == product.clone() {
+                index = i
+            }
+        }
+        self.list.remove(index)
     }
 }
 
@@ -666,20 +664,6 @@ impl InteractiveProductTerm {
         self.search_data.get_product( &ProductKind { name: self.input.clone() } )
     }
     fn start_session(&mut self) {
-        fn parse_terminal() -> Option<Key> {
-            let stdin = stdin();
-            let _stdout = stdout().into_raw_mode().unwrap();
-            for c in stdin.events() {
-                let evt = c.unwrap();
-                return match evt {
-                    Event::Key(key) => {
-                        Some(key)
-                    }
-                    _ => { None }
-                }
-            }
-            return None
-        }
         let mut in_match = MatchInput::new();
         self.is_running = true;
         print!("{}", self.offset_text);
@@ -721,14 +705,14 @@ impl InteractiveProductTerm {
                         "{}{}{}{}",
                         Goto(self.offset as u16, y),
                         color::Fg(color::Rgb(0x77, 0x77, 0x77)),
-                        termion::clear::AfterCursor,
+                        clear::AfterCursor,
                         pkind
                     );
                     print!("{}{}{}{}", Goto((index + self.offset) as u16, y), color::Fg(color::Green), self.input, color::Fg(color::Reset));
                 }
-                None if self.input == "" => { print!("{}{}", Goto(self.offset as u16, y), termion::clear::AfterCursor) }
+                None if self.input == "" => { print!("{}{}", Goto(self.offset as u16, y), clear::AfterCursor) }
                 None => {
-                    print!("{}{}", Goto(self.offset as u16, y), termion::clear::AfterCursor);
+                    print!("{}{}", Goto(self.offset as u16, y), clear::AfterCursor);
                     print!("{}{}{}{}", Goto((self.offset) as u16, y), color::Fg(color::Red), self.input, color::Fg(color::Reset));
                 }
             };
@@ -739,64 +723,137 @@ impl InteractiveProductTerm {
 
 #[allow(dead_code)]
 struct InteractiveEditTerm {
-    header: Vec<String>,
-    values: Vec<String>,
-    edit_product: Product,
+    rows: Vec<EditRow>,
+    selected_row: i16,
+    is_running: bool,
 }
 
 impl InteractiveEditTerm {
-    fn new(edit_type: String, product: Product) -> Self {
-        let mut header = vec![];
-        let mut values = vec![];
-        match edit_type.as_str() {
-            "1" => {
-                header = vec!["Name".to_string(), "Time".to_string(), "Amount".to_string()];
-                values = vec![product.kind.name.clone(), product.time.to_string(), product.amount.to_string()];
+    fn new(product: Product) -> Self {
+        let mut header = vec!["Name".to_string(), "Time".to_string(), "Amount".to_string()];
+        let mut values = vec![product.kind.name.clone(), product.time.to_string(), product.amount.to_string()];
+
+        for rec_part in product.recipe_products.clone() {
+            header.push(rec_part.kind.name);
+            values.push(rec_part.amount.to_string())
+        }
+        let terminal_space = "\n".repeat(header.len() + 1);
+        println!("{}", terminal_space);
+        let mut stdout = stdout().into_raw_mode().unwrap();
+        let (_, y) = match stdout.cursor_pos() {
+            Ok(pos) => pos,
+            Err(err) => {
+                IOError( err.to_string(), 1, format!("Could not locate cursor, reverting to default 1, 1")).show();
+                (0, 0)
             }
-            "2" => {
-                for rec_part in product.recipe_products.clone() {
-                    header.push(rec_part.kind.name);
-                    values.push(rec_part.amount.to_string())
-                }
-            }
-            "" => {
-                header = vec!["Name".to_string(), "Time".to_string(), "Amount".to_string()];
-                values = vec![product.kind.name.clone(), product.time.to_string(), product.amount.to_string()];
-            }
-            rest => {
-                InputError(rest.to_string(), 20, format!("Expected 1 or 2 but got {}", rest)).show();
-            }
+        };
+        let mut width = 0;
+        for head in header.clone() {
+            width = max(width, head.len() + 4)
+        }
+        let mut rows = vec![];
+        for (index, head) in header.into_iter().enumerate() {
+            let value = values[index].clone();
+            rows.push(EditRow::new(y - values.len() as u16 + index as u16, head, value, width as u16));
         }
         return InteractiveEditTerm {
-            header,
-            values,
-            edit_product: product
+            rows,
+            selected_row: 0,
+            is_running: false,
         }
     }
     fn start_session(&mut self) {
-        println!("\n");
-        let mut width = 0;
-        for head in self.header.clone() {
-            width = max(width, head.len() + 4)
+        // TODO: allow editing of the products in the recipe and adding new products
+        self.is_running = true;
+        for row in &self.rows {
+            row.print()
         }
-        let mut stdout = stdout().into_raw_mode().unwrap();
-        for (index, head) in self.header.clone().into_iter().enumerate() {
-            let value = self.values[index].clone();
+        while self.is_running {
+            let current_row = &mut self.rows[self.selected_row as usize];
+            current_row.select();
+            let key = parse_terminal();
 
-            let (_, y) = match stdout.cursor_pos() {
-                Ok(pos) => pos,
-                Err(err) => {
-                    IOError( err.to_string(), 1, format!("Could not locate cursor, reverting to default 1, 1")).show();
-                    break
+            match key {
+                Some(Key::Backspace)  => { current_row.value.remove(current_row.value.len() - 1); }
+                Some(Key::Char('\n')) => {
+                    self.is_running = false
                 }
-            };
-
-            println!("{}{}{}{}{}{}", Goto(0, y), head, Goto(width as u16, y), color::Fg(color::Green), value, color::Fg(color::Reset))
+                Some(Key::Char('\t')) => {}
+                Some(Key::Up)   => {
+                    current_row.deselect();
+                    self.selected_row = (self.selected_row - 1).rem_euclid(self.rows.len() as i16)
+                }
+                Some(Key::Down) => {
+                    current_row.deselect();
+                    self.selected_row = (self.selected_row + 1).rem_euclid(self.rows.len() as i16)
+                }
+                // TODO: add a catch when a non number get filled in a number field and turn it red
+                Some(Key::Char(char)) => { current_row.value.push(char) }
+                _ => { break }
+            }
         }
-        // TODO: arrow keys select the row you want to change
-        // TODO: changed values should become yellow
-        println!();
     }
+    fn get_product(&self) -> Product {
+        let mut recipe_products = vec![];
+        for (index, rec_part_name) in self.rows[3..].into_iter().enumerate() {
+            recipe_products.push( RecipePart { kind: ProductKind { name: rec_part_name.head.clone() }, amount: self.rows[index + 3].value.parse().unwrap() } )
+        }
+        return Product {
+            kind: ProductKind { name: self.rows[0].value.clone() },
+            time: self.rows[1].value.parse().unwrap(),
+            amount: self.rows[2].value.parse().unwrap(),
+            recipe_products
+        }
+    }
+}
+
+#[derive(Clone)]
+struct EditRow {
+    row_index: u16,
+    head: String,
+    value: String,
+    spacing: u16,
+    is_selected: bool,
+}
+
+impl EditRow {
+    fn new(row_index: u16, head: String, value: String, spacing: u16) -> Self {
+        return EditRow { row_index, head: head.clone(), value: value.clone(), spacing, is_selected: false }
+    }
+    fn print(&self) {
+        print!("{}{}{}{}", Goto(0, self.row_index), clear::CurrentLine, self.head, Goto(self.spacing, self.row_index));
+        if self.is_selected {
+            print!("{}", color::Fg(color::Yellow));
+        } else {
+            print!("{}", color::Fg(color::Green));
+        }
+        print!("{}{}", self.value, color::Fg(color::Reset));
+    }
+    fn select(&mut self) {
+        self.is_selected = true;
+        self.print();
+        stdout().flush().unwrap();
+    }
+    fn deselect(&mut self) {
+        self.is_selected = false;
+        self.print();
+        stdout().flush().unwrap();
+    }
+}
+
+fn parse_terminal() -> Option<Key> {
+    let stdin = stdin();
+    let _stdout = stdout().into_raw_mode().unwrap();
+    for c in stdin.events() {
+        let evt = c.unwrap();
+        return match evt {
+            Event::Key(key) => {
+                Some(key)
+            }
+            _ => { None }
+        }
+    }
+    return None
 }
 
 fn new_product_recipe_dialog() -> Option<(String, i8)> {
