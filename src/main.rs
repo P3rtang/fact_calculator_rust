@@ -1,9 +1,5 @@
-use std::{fs, fmt::{Formatter, Display, Result}, io::{stdout, stdin, Write}};
-use std::cmp::{max, Ordering};
-use std::fs::OpenOptions;
-use std::iter::{Enumerate, Peekable};
-use std::process::exit;
-use std::str::Chars;
+use std::{fs, fmt::{Formatter, Display, Result}, io::{stdout, stdin, Write}, cmp::{max, Ordering}, iter::{Enumerate, Peekable}, process::exit, str::Chars};
+use std::str::FromStr;
 use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, cursor::{DetectCursorPos, Goto}, clear};
 use crate::Error::{InputError, IOError, KeyError, SyntaxError, ValueError};
 
@@ -84,7 +80,6 @@ impl Command {
 
                     [] => {
                         let new_product = Self::new_interactive_session(data);
-                        println!("{:?}", new_product);
                         data.add(new_product.clone());
                         save_product_to_file(new_product, "products.csv".to_string())
                     }
@@ -111,9 +106,10 @@ impl Command {
         }
     }
     fn new_interactive_session(data: &ProductList) -> Product {
-        let name   = get_input    ("             name >> ".to_string(), true);
-        let time   = get_input_f32("  production_time >> ".to_string());
-        let amount = get_input_i16("production amount >> ".to_string()) as i8;
+        let name    = get_input    ("             name >> ".to_string(), true);
+        let time    = get_input_f32("  production_time >> ".to_string());
+        let amount  = get_input_i16("production amount >> ".to_string()) as i8;
+        let machine = get_input    ("     machine type >> ".to_string(), true).parse::<MachineKind>().unwrap();
 
         println!("recipe parts: ");
 
@@ -136,6 +132,7 @@ impl Command {
             kind: ProductKind { name },
             time,
             amount,
+            machine,
             recipe_products,
         }
     }
@@ -220,13 +217,48 @@ impl RecipePart {
     }
 }
 
-#[allow(dead_code)]
+#[derive(Debug, Clone)]
+enum MachineKind {
+    Smelter,
+    Factory,
+    Chemical,
+    Refinery,
+    Miner,
+}
+
+impl FromStr for MachineKind {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        return match s {
+            "smelter" => Ok(Self::Smelter),
+            "factory" => Ok(Self::Factory),
+            "chemical" => Ok(Self::Chemical),
+            "refinery" => Ok(Self::Refinery),
+            "miner" => Ok(Self::Miner),
+            _ => Err(()),
+        }
+    }
+}
+
+impl Display for MachineKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        match self {
+            Self::Smelter  => write!(f, "smelter"),
+            Self::Factory  => write!(f, "factory"),
+            Self::Chemical => write!(f, "chemical"),
+            Self::Refinery => write!(f, "refinery"),
+            Self::Miner    => write!(f, "miner"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Product {
     kind: ProductKind,
     time: f32,
     amount: i8,
-    // TODO: add production type (eg. smelter, factory, ...)
+    machine: MachineKind,
     recipe_products: Vec<RecipePart>,
 }
 
@@ -262,8 +294,8 @@ impl Ord for Product {
 }
 
 impl Product {
-    fn new(kind: ProductKind, time: f32, amount: i8, recipe_products: Vec<RecipePart>) -> Product {
-        let product = Product{ kind, time, amount, recipe_products};
+    fn new(kind: ProductKind, time: f32, amount: i8, crafter_kind: MachineKind, recipe_products: Vec<RecipePart>) -> Product {
+        let product = Product{ kind, time, amount, machine: crafter_kind, recipe_products};
         product
     }
 }
@@ -356,7 +388,6 @@ impl Display for Node {
     }
 }
 
-#[allow(dead_code)]
 struct Tree {
     parent: Node,
     indent: usize,
@@ -374,7 +405,6 @@ impl Display for Tree {
     }
 }
 
-#[allow(dead_code)]
 impl Tree {
     fn new (node: Node, indent: usize, data: &ProductList) -> Tree {
         let mut children = vec![];
@@ -458,15 +488,13 @@ impl <Char: Iterator<Item=char>> Lexer<Char> {
     }
 }
 
-#[allow(dead_code)]
 struct MatchInput {
     index: usize,
-    match_index_list: Vec<usize>,
 }
 
 impl MatchInput {
     fn new() -> Self {
-        return MatchInput{index: 0, match_index_list: Vec::new()}
+        return MatchInput{index: 0}
     }
     fn find (&mut self, input: String, data: Box<ProductList>) -> Option<(ProductKind, usize)> {
         if input == "" { return None}
@@ -539,11 +567,11 @@ fn get_input_i16(input_hint: String) -> i16 {
 }
 
 fn save_product_to_file(product: Product, file: String) {
-    let mut line = format!("{},{},{}", product.kind.name, product.time, product.amount);
+    let mut line = format!("{},{},{},{}", product.kind.name, product.time, product.amount, product.machine);
     for rec_part in product.recipe_products {
         line.push_str(&format!(",{}", rec_part))
     }
-    let mut file = OpenOptions::new()
+    let mut file = fs::OpenOptions::new()
         .append(true)
         .open(file)
         .unwrap();
@@ -555,17 +583,16 @@ fn save_product_to_file(product: Product, file: String) {
 
 fn generate_result(node: Node, data: &ProductList) -> Vec<Node> {
     let mut result_vec = vec![];
-    // scalar references items per second
     let sub = data.get_product(&node.product_kind);
     match sub {
         None => {},
         Some(product) => {
+            // scalar references items per second
             let scalar = node.amount / product.time as f32;
             for recipe_part in product.recipe_products.clone() {
                 let sub_time = data.get_product(&recipe_part.kind);
                 match sub_time {
                     Some(sub_product) => {
-                        println!("{:?}", sub_product);
                         result_vec.push(
                             Node {
                                 product_kind: recipe_part.kind,
@@ -597,7 +624,8 @@ fn parse_file(filename: &str) -> ProductList{
                         ProductKind::new(parse_line[0].to_string()),
                         parse_line[1].parse().unwrap(),
                         parse_line[2].parse().unwrap(),
-                        RecipePart::parse_recipe(&parse_line[3..])
+                        parse_line[3].parse().unwrap(),
+                        RecipePart::parse_recipe(&parse_line[4..])
                     );
                     list.push(p)
                 }
@@ -720,7 +748,6 @@ impl InteractiveProductTerm {
     }
 }
 
-#[allow(dead_code)]
 struct InteractiveEditTerm {
     rows: Vec<EditRow>,
     selected_row: i16,
@@ -729,7 +756,7 @@ struct InteractiveEditTerm {
 
 impl InteractiveEditTerm {
     fn new(product: Product) -> Self {
-        let mut header = vec!["Name".to_string(), "Time".to_string(), "Amount".to_string()];
+        let mut header = vec!["Name".to_string(), "Time".to_string(), "Amount".to_string(), "Machine".to_string()];
         let mut values = vec![product.kind.name.clone(), product.time.to_string(), product.amount.to_string()];
 
         for rec_part in product.recipe_products.clone() {
@@ -795,7 +822,6 @@ impl InteractiveEditTerm {
                     current_row.deselect();
                     self.selected_row = (self.selected_row + 1).rem_euclid(rows_len )
                 }
-                // TODO: add a catch when a non number get filled in a number field and turn it red
                 Some(Key::Char(char)) => { current_row.value.push(char) }
                 _ => { break }
             }
@@ -805,13 +831,14 @@ impl InteractiveEditTerm {
     }
     fn get_product(&self) -> Product {
         let mut recipe_products = vec![];
-        for (index, rec_part_name) in self.rows[3..].into_iter().enumerate() {
-            recipe_products.push( RecipePart { kind: ProductKind { name: rec_part_name.head.clone() }, amount: self.rows[index + 3].value.parse().unwrap() } )
+        for (index, rec_part_name) in self.rows[4..].into_iter().enumerate() {
+            recipe_products.push( RecipePart { kind: ProductKind { name: rec_part_name.head.clone() }, amount: self.rows[index + 4].value.parse().unwrap() } )
         }
         return Product {
             kind: ProductKind { name: self.rows[0].value.clone() },
             time: self.rows[1].value.parse().unwrap(),
             amount: self.rows[2].value.parse().unwrap(),
+            machine: self.rows[3].value.parse().unwrap(),
             recipe_products
         }
     }
