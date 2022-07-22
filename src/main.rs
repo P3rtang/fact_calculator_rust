@@ -9,7 +9,6 @@ use crate::Error::{InputError, IOError, KeyError, SyntaxError, ValueError};
 
 static QUIT: bool = false;
 
-
 #[derive(Debug)]
 enum CommandKind {
     Help,
@@ -769,29 +768,40 @@ impl InteractiveEditTerm {
             row.print()
         }
         while self.is_running {
+            let rows_len = self.rows.len() as i16;
             let current_row = &mut self.rows[self.selected_row as usize];
             current_row.select();
+
             let key = parse_terminal();
 
             match key {
-                Some(Key::Backspace)  => { current_row.value.remove(current_row.value.len() - 1); }
+                Some(Key::Backspace)  => {
+                    current_row.value.remove(current_row.value.len() - 1);
+                }
                 Some(Key::Char('\n')) => {
-                    self.is_running = false
+                    self.is_running = false;
+                    for row in &self.rows {
+                        if row.error {
+                            self.is_running = true
+                        }
+                    }
                 }
                 Some(Key::Char('\t')) => {}
                 Some(Key::Up)   => {
                     current_row.deselect();
-                    self.selected_row = (self.selected_row - 1).rem_euclid(self.rows.len() as i16)
+                    self.selected_row = (self.selected_row - 1).rem_euclid(rows_len )
                 }
                 Some(Key::Down) => {
                     current_row.deselect();
-                    self.selected_row = (self.selected_row + 1).rem_euclid(self.rows.len() as i16)
+                    self.selected_row = (self.selected_row + 1).rem_euclid(rows_len )
                 }
                 // TODO: add a catch when a non number get filled in a number field and turn it red
                 Some(Key::Char(char)) => { current_row.value.push(char) }
                 _ => { break }
             }
         }
+        let terminal_space = "\n".repeat(self.rows.len() - self.selected_row as usize - 2);
+        println!("{}", terminal_space);
     }
     fn get_product(&self) -> Product {
         let mut recipe_products = vec![];
@@ -812,17 +822,33 @@ struct EditRow {
     row_index: u16,
     head: String,
     value: String,
+    value_type: i8,
     spacing: u16,
     is_selected: bool,
+    error: bool,
 }
 
 impl EditRow {
     fn new(row_index: u16, head: String, value: String, spacing: u16) -> Self {
-        return EditRow { row_index, head: head.clone(), value: value.clone(), spacing, is_selected: false }
+        /*  value type
+            0: string
+            1: integer
+            2: float    */
+        let value_type: i8;
+        if head == "Name" {
+            value_type = 0
+        } else if head == "Time" {
+            value_type = 1
+        } else {
+            value_type = 2
+        }
+        return EditRow { row_index, head: head.clone(), value: value.clone(), value_type, spacing, is_selected: false, error: false }
     }
     fn print(&self) {
         print!("{}{}{}{}", Goto(0, self.row_index), clear::CurrentLine, self.head, Goto(self.spacing, self.row_index));
-        if self.is_selected {
+        if self.error == true {
+            print!("{}", color::Fg(color::Red))
+        } else if self.is_selected {
             print!("{}", color::Fg(color::Yellow));
         } else {
             print!("{}", color::Fg(color::Green));
@@ -830,6 +856,21 @@ impl EditRow {
         print!("{}{}", self.value, color::Fg(color::Reset));
     }
     fn select(&mut self) {
+        match self.value_type {
+            0 => match self.value.parse::<String>() {
+                Ok(_)  => self.error = false,
+                Err(_) => self.error = true,
+            }
+            1 => match self.value.parse::<i16>() {
+                Ok(_)  => self.error = false,
+                Err(_) => self.error = true,
+            }
+            2 => match self.value.parse::<f32>() {
+                Ok(_)  => self.error = false,
+                Err(_) => self.error = true,
+            },
+            _ => {}
+        }
         self.is_selected = true;
         self.print();
         stdout().flush().unwrap();
