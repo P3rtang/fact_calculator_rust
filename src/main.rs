@@ -1,4 +1,5 @@
 use std::{fs, fmt::{Formatter, Display, Result}, io::{stdout, stdin, Write}, cmp::{max, Ordering}, iter::{Enumerate, Peekable}, process::exit, str::Chars};
+use std::collections::HashMap;
 use std::str::FromStr;
 use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, cursor::{DetectCursorPos, Goto}, clear};
 use crate::Error::{InputError, IOError, KeyError, SyntaxError, ValueError};
@@ -21,14 +22,14 @@ struct Command {
 }
 
 impl Command {
-    fn run(&self, data: &mut ProductList) {
+    fn run(&self, data: &mut ProductList, settings: &Settings) {
         match &self.kind {
             CommandKind::Help    => println!("{}", self),
             CommandKind::Calc    => {
                 match &self.args[..] {
                     [token1, token2] => {
                         let node = Node { product_kind: ProductKind { name: token1.clone().text }, amount: token2.text.parse().unwrap() };
-                        let tree = Tree::new(node, 0, data);
+                        let tree = Tree::new(node, 0, data, settings);
                         tree.traverse()
                     }
                     [err,..] => {
@@ -49,7 +50,7 @@ impl Command {
                             Err(_) => { ValueError(amount, 9, format!("Could not interpret this as a number defaulting to 1.0")).show(); 1.0 }
                         };
                         let node = Node { product_kind: ProductKind { name: product }, amount: parse_amount };
-                        let tree = Tree::new(node, 0, data);
+                        let tree = Tree::new(node, 0, data ,settings);
                         tree.traverse()
                     }
                 }
@@ -217,7 +218,7 @@ impl RecipePart {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 enum MachineKind {
     Smelter,
     Factory,
@@ -376,6 +377,10 @@ impl ProductList {
     }
 }
 
+struct Settings {
+    speed: HashMap<MachineKind, f32>,
+}
+
 #[derive(Debug, Clone)]
 struct Node {
     product_kind: ProductKind,
@@ -406,11 +411,11 @@ impl Display for Tree {
 }
 
 impl Tree {
-    fn new (node: Node, indent: usize, data: &ProductList) -> Tree {
+    fn new (node: Node, indent: usize, data: &ProductList, settings: &Settings) -> Tree {
         let mut children = vec![];
-        let node_calc = generate_result(node.clone(), data);
+        let node_calc = generate_result(node.clone(), data, settings);
         for sub_node in node_calc {
-            let boxed_sub_tree = Box::new(Tree::new(sub_node, indent + 1, data));
+            let boxed_sub_tree = Box::new(Tree::new(sub_node, indent + 1, data, settings));
             children.push(boxed_sub_tree)
         }
         let tree = Tree { parent: node, indent, children };
@@ -581,14 +586,16 @@ fn save_product_to_file(product: Product, file: String) {
     }
 }
 
-fn generate_result(node: Node, data: &ProductList) -> Vec<Node> {
+fn generate_result(node: Node, data: &ProductList, settings: &Settings) -> Vec<Node> {
     let mut result_vec = vec![];
     let sub = data.get_product(&node.product_kind);
     match sub {
         None => {},
         Some(product) => {
+            // multiplier is the machine type multiplier defined in products.csv
+            let multiplier = settings.speed[&product.machine];
             // scalar references items per second
-            let scalar = node.amount / product.time as f32;
+            let scalar = node.amount / product.time as f32 * multiplier;
             for recipe_part in product.recipe_products.clone() {
                 let sub_time = data.get_product(&recipe_part.kind);
                 match sub_time {
@@ -596,7 +603,7 @@ fn generate_result(node: Node, data: &ProductList) -> Vec<Node> {
                         result_vec.push(
                             Node {
                                 product_kind: recipe_part.kind,
-                                amount: scalar as f32 * recipe_part.amount as f32 * (sub_product.time / (sub_product.amount as f32)),
+                                amount: scalar / settings.speed[&sub_product.machine] * recipe_part.amount as f32 * (sub_product.time / (sub_product.amount as f32)),
                             }
                         )
                     },
@@ -608,32 +615,46 @@ fn generate_result(node: Node, data: &ProductList) -> Vec<Node> {
     result_vec
 }
 
-fn parse_file(filename: &str) -> ProductList{
+fn parse_file(filename: &str) -> (ProductList, Settings) {
     // TODO: report duplicate entries
-    let mut list = vec![];
+    let mut product_list  = vec![];
+    let mut settings_map: HashMap<MachineKind, f32> = HashMap::new();
 
     let file = fs::read_to_string(filename)
         .expect("failed to read file");
-    for line in file.split('\n') {
-        match line.chars().peekable().peek() {
+    for (line_nmr, line) in file.split('\n').enumerate() {
+        let mut line_iter = line.chars();
+        match line_iter.next() {
             Some('#') => { },
-            _  => {
-                let parse_line: Vec<&str> = line.split(',').collect();
-                if parse_line != [""] {
-                    let p = Product::new(
-                        ProductKind::new(parse_line[0].to_string()),
-                        parse_line[1].parse().unwrap(),
-                        parse_line[2].parse().unwrap(),
-                        parse_line[3].parse().unwrap(),
-                        RecipePart::parse_recipe(&parse_line[4..])
-                    );
-                    list.push(p)
-                }
-                else {}
+            Some('>')  => {
+                let line_stripped = &line.clone().replace("> ", "");
+                let parse_line: Vec<&str> = line_stripped.split(',').collect();
+                let p = Product::new(
+                    ProductKind::new(parse_line[0].to_string()),
+                    parse_line[1].parse().unwrap(),
+                    parse_line[2].parse().unwrap(),
+                    parse_line[3].parse().unwrap(),
+                    RecipePart::parse_recipe(&parse_line[4..]));
+                product_list.push(p)
             }
+            Some('-') => {
+                match line_iter.next() {
+                    Some('-') => {
+                        let line_stripped = &line.clone().replace("-- ", "");
+                        let parse_line: Vec<&str> = line_stripped.split(": ").collect();
+                        if parse_line.len() != 2 {
+                            println!("{}[FATAL] line {} has too many arguments expected two separated by ':' {}", color::Fg(color::Red), line_nmr, color::Fg(color::Reset));
+                            exit(1)
+                        }
+                        settings_map.insert(parse_line[0].parse().unwrap(), parse_line[1].parse().unwrap());
+                    }
+                    _ => println!("[WARNING] line {} in {} starts with -, omitting line", line_nmr, filename)
+                }
+            }
+            _ => {}
         }
     }
-    return ProductList { list }
+    return (ProductList { list: product_list }, Settings { speed: settings_map })
 }
 
 fn parse_lexer(lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
@@ -952,7 +973,7 @@ fn new_product_recipe_dialog() -> Option<(String, i8)> {
 }
 
 fn main() {
-    let mut data = parse_file("products.csv");
+    let (mut data, settings) = parse_file("products.csv");
     // print!("{:?}", data);
     println!("------------------------------------------------------");
     println!("Use the Calc command without arguments to get a guided calculation");
@@ -965,6 +986,6 @@ fn main() {
         stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
         stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
         let mut lexer = Lexer::new(io_input.clone(), io_input.chars());
-        if let Some(command) = parse_lexer(&mut lexer) { command.run(&mut data) } else {};
+        if let Some(command) = parse_lexer(&mut lexer) { command.run(&mut data, &settings) } else {};
     }
 }

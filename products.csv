@@ -1,19 +1,25 @@
+-- factory: 0.75
+-- smelter: 2
+-- miner: 1
+-- refinery: 1
+-- chemical: 1
+
 # product, time, amount, recipe
-green_circuit,1.3,1,factory,copper_wire:3,stone_plate:1
-copper_wire,0.5,2,factory,copper_plate:1
-stone_plate,0.125,1,factory
-small_electric_motor,0.8,1,factory,copper_wire:6,iron_gear_wheel:1,iron_plate:1
-iron_gear_wheel,0.5,1,factory,iron_plate:2
-iron_plate,3.2,1,smelter
-red_science,5,1,factory,iron_gear_wheel:1,copper_plate:1
-copper_plate,3.2,1,smelter
-inserter,0.5,1,factory,burner_inserter:1,small_electric_motor:1
-burner_inserter,0.5,1,factory,iron_stick:2,single_c_engine:1
-iron_stick,0.5,1,factory,iron_plate:1
-single_c_engine,0.6,1,factory,iron_gear_wheel:1,iron_plate:1
-green_science,10,1,factory,inserter:1,transport_belt:2
-transport_belt,0.25,1,factory,single_c_engine:1,iron_plate:1
-stone,1,1,miner
-glass,4,1,smelter,sand:4
-steel,16,1,smelter,iron_plate:5
-sand,0.5,2,factory,stone:1
+> green_circuit,1.3,1,factory,copper_wire:3,stone_plate:1
+> copper_wire,0.5,2,factory,copper_plate:1
+> stone_plate,0.125,1,factory
+> small_electric_motor,0.8,1,factory,copper_wire:6,iron_gear_wheel:1,iron_plate:1
+> iron_gear_wheel,0.5,1,factory,iron_plate:2
+> iron_plate,3.2,1,smelter
+> red_science,5,1,factory,iron_gear_wheel:1,copper_plate:1
+> copper_plate,3.2,1,smelter
+> inserter,0.5,1,factory,burner_inserter:1,small_electric_motor:1
+> burner_inserter,0.5,1,factory,iron_stick:2,single_c_engine:1
+> iron_stick,0.5,1,factory,iron_plate:1
+> single_c_engine,0.6,1,factory,iron_gear_wheel:1,iron_plate:1
+> green_science,10,1,factory,inserter:1,transport_belt:2
+> transport_belt,0.25,1,factory,single_c_engine:1,iron_plate:1
+> stone,1,1,miner
+> glass,4,1,smelter,sand:4
+> steel,16,1,smelter,iron_plate:5
+> sand,0.5,2,factory,stone:1
