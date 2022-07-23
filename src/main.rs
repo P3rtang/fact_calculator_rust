@@ -1,5 +1,6 @@
 use std::{fs, fmt::{Formatter, Display, Result}, str::FromStr, io::{stdout, stdin, Write}, cmp::{max, Ordering}, iter::{Enumerate, Peekable}, process::exit, str::Chars, collections::HashMap};
-use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, cursor::{DetectCursorPos, Goto}, clear};
+use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, cursor, clear};
+use termion::cursor::{DetectCursorPos};
 use crate::Error::{InputError, IOError, KeyError, SyntaxError, ValueError};
 
 static QUIT: bool = false;
@@ -78,9 +79,22 @@ impl Command {
                     }
 
                     [] => {
-                        let new_product = Self::new_interactive_session(data);
-                        data.add(new_product.clone());
-                        save_product_to_file(new_product, "products.csv".to_string())
+                        // TODO: add a default for product and use it here
+                        let new_template = Product {
+                            kind: ProductKind { name: "new_name".to_string() },
+                            time: 1.0,
+                            amount: 1,
+                            machine: MachineKind::Factory,
+                            recipe_products: vec![]
+                        };
+                        let mut interactive_session = InteractiveEditTerm::new(new_template);
+                        interactive_session.start_session();
+
+                        let new_product = interactive_session.get_product();
+                        if !interactive_session.escape_pressed {
+                            data.add(new_product.clone());
+                            save_product_to_file(new_product, "products.csv".to_string())
+                        }
                     }
                 }
             }
@@ -93,9 +107,8 @@ impl Command {
                 if let Some(product) = interactive_product_session.input_get_product() {
                     let mut interactive_edit_session = InteractiveEditTerm::new(product.clone());
                     interactive_edit_session.start_session();
-                    let edited_product = interactive_edit_session.get_product();
-                    println!();
                     if !interactive_edit_session.escape_pressed {
+                        let edited_product = interactive_edit_session.get_product();
                         data.remove(product);
                         data.add(edited_product);
                     }
@@ -104,37 +117,6 @@ impl Command {
                     InputError("".to_string(), 9, format!("Could not find {}", interactive_product_session.input)).show();
                 }
             }
-        }
-    }
-    fn new_interactive_session(data: &ProductList) -> Product {
-        let name    = get_input    ("             name >> ".to_string(), true);
-        let time    = get_input_f32("  production_time >> ".to_string());
-        let amount  = get_input_i16("production amount >> ".to_string()) as i8;
-        let machine = get_input    ("     machine type >> ".to_string(), true).parse::<MachineKind>().unwrap();
-
-        println!("recipe parts: ");
-
-        let mut recipe_products = vec![];
-        let mut part_num = 1;
-        let mut interactive_terminal = InteractiveProductTerm::new(format!("Part {} >> ", part_num), data);
-        interactive_terminal.start_session();
-
-        let mut product_name = interactive_terminal.input.clone();
-        while product_name != "" {
-            part_num += 1;
-            interactive_terminal.reset(format!("Part {} >> ", part_num));
-            let req_amount = get_input_i16(format!("\ncost >> ")) as i8;
-            recipe_products.push( RecipePart { kind: ProductKind { name: product_name }, amount: req_amount } );
-            interactive_terminal.start_session();
-            product_name = interactive_terminal.input.clone();
-        }
-
-        return Product {
-            kind: ProductKind { name },
-            time,
-            amount,
-            machine,
-            recipe_products,
         }
     }
 }
@@ -529,6 +511,7 @@ impl MatchInput {
     }
 }
 
+#[allow(dead_code)]
 fn get_input(input_hint: String, strip_nl: bool) -> String {
     let mut input = String::new();
 
@@ -543,6 +526,7 @@ fn get_input(input_hint: String, strip_nl: bool) -> String {
     return input
 }
 
+#[allow(dead_code)]
 fn get_input_f32(input_hint: String) -> f32 {
     let mut float = String::new();
 
@@ -557,6 +541,7 @@ fn get_input_f32(input_hint: String) -> f32 {
     return parsed_f32
 }
 
+#[allow(dead_code)]
 fn get_input_i16(input_hint: String) -> i16 {
     let mut int = String::new();
 
@@ -572,7 +557,7 @@ fn get_input_i16(input_hint: String) -> i16 {
 }
 
 fn save_product_to_file(product: Product, file: String) {
-    let mut line = format!("{},{},{},{}", product.kind.name, product.time, product.amount, product.machine);
+    let mut line = format!("> {},{},{},{}", product.kind.name, product.time, product.amount, product.machine);
     for rec_part in product.recipe_products {
         line.push_str(&format!(",{}", rec_part))
     }
@@ -590,7 +575,9 @@ fn generate_result(node: Node, data: &ProductList, settings: &Settings) -> Vec<N
     let mut result_vec = vec![];
     let sub = data.get_product(&node.product_kind);
     match sub {
-        None => {},
+        None => {
+            ValueError( format!("{}", node.to_string()), 0, format!("When calculating {} was found in the recipe but not in 'products.csv'", node.to_string())).show()
+        },
         Some(product) => {
             // multiplier is the machine type multiplier defined in products.csv
             let multiplier = settings.speed[&product.machine];
@@ -607,7 +594,12 @@ fn generate_result(node: Node, data: &ProductList, settings: &Settings) -> Vec<N
                             }
                         )
                     },
-                    None => {}
+                    None => {
+                        ValueError(
+                            format!("{}", recipe_part.kind), 0,
+                            format!("When calculating '{}', '{}' was found in the recipe but not in 'products.csv', ignoring this product", node.product_kind, recipe_part.kind)
+                        ).show()
+                    }
                 }
             }
         }
@@ -648,7 +640,7 @@ fn parse_file(filename: &str) -> (ProductList, Settings) {
                         }
                         settings_map.insert(parse_line[0].parse().unwrap(), parse_line[1].parse().unwrap());
                     }
-                    _ => println!("[WARNING] line {} in {} starts with -, omitting line", line_nmr, filename)
+                    _ => println!("[WARNING] line {} in {} starts with -, ignoring line", line_nmr, filename)
                 }
             }
             _ => {}
@@ -675,12 +667,12 @@ fn parse_lexer(lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
                     "list" => { Some(Command { kind:CommandKind::List, args: vec![] }) },
                     "edit" => { Some(Command { kind:CommandKind::Edit, args: vec![] }) },
                     err => {
-                        KeyError(err.to_string(), token.loc, "Unexpected Command use Help for possible commands".to_string()).show();
+                        KeyError(err.to_string(), token.loc + 2, format!("Unexpected Command '{}' use Help for possible commands", err)).show();
                         None
                     }
                 }
             },
-            _ => { SyntaxError(token.clone().text, token.loc, format!("Unexpected Token {} use Help for possible commands", token.text)); None },
+            _ => { SyntaxError(token.clone().text, token.loc + 2, format!("Unexpected Token '{}' use Help for possible commands", token.text)); None },
         }
     } else { None }
 }
@@ -693,7 +685,7 @@ struct InteractiveProductTerm {
     search_data: Box<ProductList>
 }
 
-// TODO: remove this section and put it under edit mode with an empty template
+#[allow(dead_code)]
 impl InteractiveProductTerm {
     fn new(offset_text: String, data: &ProductList) -> Self {
         return InteractiveProductTerm {
@@ -752,17 +744,17 @@ impl InteractiveProductTerm {
                 Some((pkind, index)) => {
                     print!(
                         "{}{}{}{}",
-                        Goto(self.offset as u16, y),
+                        cursor::Goto(self.offset as u16, y),
                         color::Fg(color::Rgb(0x77, 0x77, 0x77)),
                         clear::AfterCursor,
                         pkind
                     );
-                    print!("{}{}{}{}", Goto((index + self.offset) as u16, y), color::Fg(color::Green), self.input, color::Fg(color::Reset));
+                    print!("{}{}{}{}", cursor::Goto((index + self.offset) as u16, y), color::Fg(color::Green), self.input, color::Fg(color::Reset));
                 }
-                None if self.input == "" => { print!("{}{}", Goto(self.offset as u16, y), clear::AfterCursor) }
+                None if self.input == "" => { print!("{}{}", cursor::Goto(self.offset as u16, y), clear::AfterCursor) }
                 None => {
-                    print!("{}{}", Goto(self.offset as u16, y), clear::AfterCursor);
-                    print!("{}{}{}{}", Goto((self.offset) as u16, y), color::Fg(color::Red), self.input, color::Fg(color::Reset));
+                    print!("{}{}", cursor::Goto(self.offset as u16, y), clear::AfterCursor);
+                    print!("{}{}{}{}", cursor::Goto((self.offset) as u16, y), color::Fg(color::Red), self.input, color::Fg(color::Reset));
                 }
             };
             stdout.flush().unwrap();
@@ -775,6 +767,7 @@ struct InteractiveEditTerm {
     selected_row: i16,
     is_running: bool,
     escape_pressed: bool,
+    cursor_position: (u16, u16)
 }
 
 impl InteractiveEditTerm {
@@ -810,25 +803,33 @@ impl InteractiveEditTerm {
             selected_row: 0,
             is_running: false,
             escape_pressed: false,
+            cursor_position: (1, 1)
         }
     }
     fn start_session(&mut self) {
         // TODO: allow editing of the products in the recipe and adding new products
         self.is_running = true;
         for row in &self.rows {
-            row.print()
+            row.print(false)
         }
+        let mut current_row = &mut self.rows[self.selected_row as usize];
+        current_row.select(false);
+        let mut stdout = stdout().into_raw_mode().unwrap();
         while self.is_running {
-            let rows_len = self.rows.len() as i16;
-            let current_row = &mut self.rows[self.selected_row as usize];
-            current_row.select();
-
+            self.cursor_position = match stdout.cursor_pos() {
+                Ok(pos) => { pos }
+                Err(_) => { self.cursor_position }
+            };
+            current_row = &mut self.rows[self.selected_row as usize];
             let key = parse_terminal();
 
             match key {
                 Some(Key::Backspace)  => {
-                    if current_row.value.len() > 0 {
-                        current_row.value.remove(current_row.value.len() - 1);
+                    if self.cursor_position.0 > current_row.spacing {
+                        current_row.value.remove((self.cursor_position.0 - current_row.spacing - 1) as usize);
+                        print!("{}", cursor::Left(1));
+                        current_row.select(true);
+                        self.cursor_position.0 -= 1
                     }
                 }
                 Some(Key::Char('\n')) => {
@@ -843,28 +844,71 @@ impl InteractiveEditTerm {
                 Some(Key::Char('\t')) => {}
                 Some(Key::Up)   => {
                     current_row.deselect();
-                    self.selected_row = (self.selected_row - 1).rem_euclid(rows_len )
+                    self.selected_row = (self.selected_row - 1).rem_euclid(self.rows.len() as i16);
+                    let current_row = &mut self.rows[self.selected_row as usize];
+                    current_row.select(false);
                 }
                 Some(Key::Down) => {
                     current_row.deselect();
-                    self.selected_row = (self.selected_row + 1).rem_euclid(rows_len )
+                    self.selected_row = (self.selected_row + 1).rem_euclid(self.rows.len() as i16);
+                    let current_row = &mut self.rows[self.selected_row as usize];
+                    current_row.select(false);
                 }
-                Some(Key::Char(char)) => { current_row.value.push(char) }
+                Some(Key::Left)  => {
+                    // checking whether the cursor can go left
+                    if self.cursor_position.0 > current_row.spacing {
+                        print!("{}", cursor::Left(1));
+                        current_row.select(true);
+                        self.cursor_position.0 -= 1
+                    }
+                }
+                Some(Key::Right) => {
+                    // checking whether the cursor can go right
+                    if self.cursor_position.0 < current_row.spacing + current_row.value.len() as u16 {
+                        print!("{}", cursor::Right(1));
+                        current_row.select(true);
+                        self.cursor_position.0 += 1
+                    }
+                }
+                Some(Key::Char(char)) => {
+                    current_row.value.insert((self.cursor_position.0 - current_row.spacing) as usize, char);
+                    print!("{}", cursor::Right(1));
+                    current_row.select(true);
+                    self.cursor_position.0 += 1
+                }
                 Some(Key::Esc) => {
                     self.escape_pressed = true;
                     self.is_running = false;
                 }
-                _ => { break }
+                Some(Key::Insert) => {
+                    let row_index = self.rows[self.rows.len() - 1].row_index + 1;
+                    let width     = self.rows[self.rows.len() - 1].spacing;
+                    let new_row = EditRow::new(row_index, "placeholder".to_string(), "1".to_string(), width as u16);
+                    self.rows.push(new_row.clone());
+                    if width < ("placeholder".len() + 4) as u16 {
+                        let mut new_rows = vec![];
+                        for mut row in self.rows.clone() {
+                            row.set_spacing(("placeholder".len() + 4) as u16);
+                            row.print(true);
+                            new_rows.push(row);
+                        }
+                        self.rows = new_rows
+                    } else {
+                        new_row.print(true);
+                    }
+                }
+                _ => { self.escape_pressed = true; break }
             }
         }
-        let terminal_space = "\n".repeat(self.rows.len() - self.selected_row as usize - 1);
-        print!("{}", terminal_space);
+        self.rows[self.rows.len() - 1].print(false);
+        println!();
     }
     fn get_product(&self) -> Product {
         let mut recipe_products = vec![];
         for (index, rec_part_name) in self.rows[4..].into_iter().enumerate() {
             recipe_products.push( RecipePart { kind: ProductKind { name: rec_part_name.head.clone() }, amount: self.rows[index + 4].value.parse().unwrap() } )
         }
+        println!();
         return Product {
             kind: ProductKind { name: self.rows[0].value.clone() },
             time: self.rows[1].value.parse().unwrap(),
@@ -904,24 +948,33 @@ impl EditRow {
         }
         return EditRow { row_index, head: head.clone(), value: value.clone(), value_type, spacing, is_selected: false, error: false }
     }
-    fn print(&self) {
-        print!("{}{}{}{}", Goto(0, self.row_index), clear::CurrentLine, self.head, Goto(self.spacing, self.row_index));
-        if self.error == true {
-            print!("{}", color::Fg(color::Red))
+    fn print(&self, save_pos: bool) {
+        if save_pos {
+            print!("{}{}{}{}{}", cursor::Save, cursor::Goto(0, self.row_index), clear::CurrentLine, self.head, cursor::Goto(self.spacing, self.row_index));
+        } else {
+            print!("{}{}{}{}", cursor::Goto(0, self.row_index), clear::CurrentLine, self.head, cursor::Goto(self.spacing, self.row_index));
+        }
+        if self.error {
+            print!("{}", color::Fg(color::Red));
         } else if self.is_selected {
             print!("{}", color::Fg(color::Yellow));
         } else {
             print!("{}", color::Fg(color::Green));
         }
-        print!("{}{}", self.value, color::Fg(color::Reset));
+        if save_pos {
+            print!("{}{}{}", self.value, color::Fg(color::Reset), cursor::Restore);
+        } else {
+            print!("{}{}", self.value, color::Fg(color::Reset));
+        }
+        stdout().flush().unwrap();
     }
-    fn select(&mut self) {
+    fn select(&mut self, save_cursor_pos: bool) {
         match self.value_type {
             0 => match self.value.parse::<String>() {
                 Ok(_)  => self.error = false,
                 Err(_) => self.error = true,
             }
-            1 => match self.value.parse::<i16>() {
+            1 => match self.value.parse::<f32>() {
                 Ok(_)  => self.error = false,
                 Err(_) => self.error = true,
             }
@@ -929,20 +982,21 @@ impl EditRow {
                 Ok(_)  => self.error = false,
                 Err(_) => self.error = true,
             },
-            3 => match self.value.parse::<f32>() {
+            3 => match self.value.parse::<i16>() {
                 Ok(_)  => self.error = false,
                 Err(_) => self.error = true,
             },
             _ => {}
         }
         self.is_selected = true;
-        self.print();
-        stdout().flush().unwrap();
+        self.print(save_cursor_pos);
     }
     fn deselect(&mut self) {
         self.is_selected = false;
-        self.print();
-        stdout().flush().unwrap();
+        self.print(false);
+    }
+    fn set_spacing(&mut self, width: u16) {
+        self.spacing = width
     }
 }
 
