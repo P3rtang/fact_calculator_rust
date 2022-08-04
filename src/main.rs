@@ -1,6 +1,6 @@
 use std::{fs, fmt::{Formatter, Display, Result}, str::FromStr, io::{stdout, stdin, Write}, cmp::{max, Ordering}, iter::{Enumerate, Peekable}, process::exit, str::Chars, collections::HashMap};
-use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, cursor, clear};
-use termion::cursor::{DetectCursorPos};
+use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, cursor, clear, style};
+use termion::cursor::{DetectCursorPos, Goto};
 use crate::Error::{InputError, IOError, KeyError, SyntaxError, ValueError};
 
 static QUIT: bool = false;
@@ -87,8 +87,8 @@ impl Command {
                             machine: MachineKind::Factory,
                             recipe_products: vec![]
                         };
-                        let mut interactive_session = InteractiveEditTerm::new(new_template);
-                        interactive_session.start_session();
+                        let mut interactive_session = InteractiveEditTerm::new(new_template, 0);
+                        interactive_session.start_session(data);
 
                         let new_product = interactive_session.get_product();
                         if !interactive_session.escape_pressed {
@@ -105,8 +105,8 @@ impl Command {
                 let mut interactive_product_session = InteractiveProductTerm::new(format!("product >> "), data);
                 interactive_product_session.start_session();
                 if let Some(product) = interactive_product_session.input_get_product() {
-                    let mut interactive_edit_session = InteractiveEditTerm::new(product.clone());
-                    interactive_edit_session.start_session();
+                    let mut interactive_edit_session = InteractiveEditTerm::new(product.clone(), 1);
+                    interactive_edit_session.start_session(data);
                     if !interactive_edit_session.escape_pressed {
                         let edited_product = interactive_edit_session.get_product();
                         data.remove(product);
@@ -711,14 +711,48 @@ impl InteractiveProductTerm {
         print!("{}", self.offset_text);
         stdout().flush().expect("IOError could not flush stdout");
         while self.is_running {
+            let mut stdout = stdout().into_raw_mode().unwrap();
+            let (_, y) = match stdout.cursor_pos() {
+                Ok(pos) => pos,
+                Err(err) => {
+                    IOError( err.to_string(), 1, format!("Could not locate cursor, reverting to default 1, 1")).show();
+                    break
+                }
+            };
+            match in_match.find(self.input.clone(), self.search_data.clone()) {
+                Some((pkind, index)) => {
+                    print!(
+                        "{}{}{}{}",
+                        Goto(self.offset as u16, y),
+                        color::Fg(color::Rgb(0x77, 0x77, 0x77)),
+                        clear::AfterCursor,
+                        pkind
+                    );
+                    print!("{}{}{}{}", Goto((index + self.offset) as u16, y), color::Fg(color::Green), self.input, color::Fg(color::Reset));
+                }
+                None if self.input == "" => { print!("{}{}product{}{}", Goto(self.offset as u16, y), color::Fg(color::Rgb(0x77, 0x77, 0x77)), clear::AfterCursor, Goto(self.offset as u16, y)) }
+                None => {
+                    print!("{}{}", Goto(self.offset as u16, y), clear::AfterCursor);
+                    print!("{}{}{}{}", Goto((self.offset) as u16, y), color::Fg(color::Red), self.input, color::Fg(color::Reset));
+                }
+            };
+            stdout.flush().unwrap();
             let key = parse_terminal();
-
             match key {
                 Some(Key::Backspace) => {
                     if self.input.is_empty() {}
                     else { self.input.remove(self.input.len() - 1); }
                 }
-                Some(Key::Char('\n')) => { self.is_running = false }
+                Some(Key::Char('\n')) => {
+                    if self.search_data.contains(&ProductKind {name: self.input.clone()}) {
+                        self.is_running = false;
+                    } else {
+                        match in_match.find(self.input.clone(), self.search_data.clone()) {
+                            Some((pkind, _)) => { self.input = pkind.name; self.is_running = false }
+                            None => {}
+                        };
+                    }
+                }
                 Some(Key::Char('\t')) => {
                     self.input = match in_match.find(self.input.clone(), self.search_data.clone()) {
                         Some((pkind, _)) => {pkind.name}
@@ -733,32 +767,6 @@ impl InteractiveProductTerm {
                 }
                 _ => { break }
             }
-            let mut stdout = stdout().into_raw_mode().unwrap();
-            let (_, y) = match stdout.cursor_pos() {
-                Ok(pos) => pos,
-                Err(err) => {
-                    IOError( err.to_string(), 1, format!("Could not locate cursor, reverting to default 1, 1")).show();
-                    break
-                }
-            };
-            match in_match.find(self.input.clone(), self.search_data.clone()) {
-                Some((pkind, index)) => {
-                    print!(
-                        "{}{}{}{}",
-                        cursor::Goto(self.offset as u16, y),
-                        color::Fg(color::Rgb(0x77, 0x77, 0x77)),
-                        clear::AfterCursor,
-                        pkind
-                    );
-                    print!("{}{}{}{}", cursor::Goto((index + self.offset) as u16, y), color::Fg(color::Green), self.input, color::Fg(color::Reset));
-                }
-                None if self.input == "" => { print!("{}{}", cursor::Goto(self.offset as u16, y), clear::AfterCursor) }
-                None => {
-                    print!("{}{}", cursor::Goto(self.offset as u16, y), clear::AfterCursor);
-                    print!("{}{}{}{}", cursor::Goto((self.offset) as u16, y), color::Fg(color::Red), self.input, color::Fg(color::Reset));
-                }
-            };
-            stdout.flush().unwrap();
         }
     }
 }
@@ -772,7 +780,15 @@ struct InteractiveEditTerm {
 }
 
 impl InteractiveEditTerm {
-    fn new(product: Product) -> Self {
+    fn new(product: Product, mode: i8) -> Self {
+        // mode 0: New
+        //      1: Edit
+        if mode == 1 {
+            print!("{}{}{}Editing: {}{}\n", clear::All, Goto(1, 1), style::Underline, product.kind.name, style::Reset);
+        } else if mode == 0 {
+            print!("{}{}{}New Product{}\n", clear::All, Goto(1, 1), style::Underline, style::Reset);
+        }
+
         let mut header = vec!["Name".to_string(), "Time".to_string(), "Amount".to_string(), "Machine".to_string()];
         let mut values = vec![product.kind.name.clone(), product.time.to_string(), product.amount.to_string(), product.machine.to_string()];
 
@@ -780,14 +796,14 @@ impl InteractiveEditTerm {
             header.push(rec_part.kind.name);
             values.push(rec_part.amount.to_string())
         }
-        let terminal_space = "\n".repeat(header.len() + 1);
+        let terminal_space = "\n".repeat(header.len() - 1);
         println!("{}", terminal_space);
         let mut stdout = stdout().into_raw_mode().unwrap();
         let (_, y) = match stdout.cursor_pos() {
             Ok(pos) => pos,
             Err(err) => {
                 IOError( err.to_string(), 1, format!("Could not locate cursor, reverting to default 1, 1")).show();
-                (0, 0)
+                (1, 1)
             }
         };
         let mut width = 0;
@@ -797,7 +813,11 @@ impl InteractiveEditTerm {
         let mut rows = vec![];
         for (index, head) in header.into_iter().enumerate() {
             let value = values[index].clone();
-            rows.push(EditRow::new(y - values.len() as u16 + index as u16, head, value, width as u16));
+            if index <= 3 {
+                rows.push(EditRow::new(y - values.len() as u16 + index as u16, false, head, value, width as u16));
+            } else {
+                rows.push(EditRow::new(y - values.len() as u16 + index as u16, true, head, value, width as u16));
+            }
         }
         return InteractiveEditTerm {
             rows,
@@ -807,8 +827,7 @@ impl InteractiveEditTerm {
             cursor_position: (1, 1)
         }
     }
-    fn start_session(&mut self) {
-        // TODO: allow editing of the products in the recipe and adding new products
+    fn start_session(&mut self, data: &ProductList) {
         self.is_running = true;
         for row in &self.rows {
             row.print(false)
@@ -842,7 +861,11 @@ impl InteractiveEditTerm {
                         }
                     }
                 }
-                Some(Key::Char('\t')) => {}
+                Some(Key::Char('\t')) => {
+                    if current_row.row_index > 4 {
+                        current_row.change_recipe_head(data);
+                    }
+                }
                 Some(Key::Up)   => {
                     current_row.deselect();
                     self.selected_row = (self.selected_row - 1).rem_euclid(self.rows.len() as i16);
@@ -884,15 +907,16 @@ impl InteractiveEditTerm {
                 Some(Key::Insert) => {
                     let row_index = self.rows[self.rows.len() - 1].row_index + 1;
                     let width     = self.rows[self.rows.len() - 1].spacing;
-                    let new_row = EditRow::new(row_index, "placeholder".to_string(), "1".to_string(), width as u16);
+                    let new_row = EditRow::new(row_index, true, "placeholder".to_string(), "1".to_string(), width as u16);
                     self.rows.push(new_row.clone());
                     if width < ("placeholder".len() + 4) as u16 {
                         let mut new_rows = vec![];
                         for mut row in self.rows.clone() {
                             row.set_spacing(("placeholder".len() + 4) as u16);
-                            row.print(true);
+                            row.print(false);
                             new_rows.push(row);
                         }
+                        print!("\n{}", cursor::Up(1));
                         self.rows = new_rows
                     } else {
                         new_row.print(true);
@@ -923,6 +947,7 @@ impl InteractiveEditTerm {
 #[derive(Clone)]
 struct EditRow {
     row_index: u16,
+    is_recipe: bool,
     head: String,
     value: String,
     value_type: i8,
@@ -932,7 +957,7 @@ struct EditRow {
 }
 
 impl EditRow {
-    fn new(row_index: u16, head: String, value: String, spacing: u16) -> Self {
+    fn new(row_index: u16, is_recipe: bool, head: String, value: String, spacing: u16) -> Self {
         /*  value type
             0: string
             1: integer
@@ -947,14 +972,17 @@ impl EditRow {
         } else {
             value_type = 3
         }
-        return EditRow { row_index, head: head.clone(), value: value.clone(), value_type, spacing, is_selected: false, error: false }
+        return EditRow { row_index, is_recipe, head: head.clone(), value: value.clone(), value_type, spacing, is_selected: false, error: false }
     }
     fn print(&self, save_pos: bool) {
         if save_pos {
-            print!("{}{}{}{}{}", cursor::Save, cursor::Goto(0, self.row_index), clear::CurrentLine, self.head, cursor::Goto(self.spacing, self.row_index));
-        } else {
-            print!("{}{}{}{}", cursor::Goto(0, self.row_index), clear::CurrentLine, self.head, cursor::Goto(self.spacing, self.row_index));
+            print!("{}", cursor::Save)
         }
+        print!("{}{}", Goto(0, self.row_index), clear::CurrentLine);
+        if self.is_recipe {
+            print!("{}", color::Fg(color::Green))
+        }
+        print!("{}{}", self.head, Goto(self.spacing, self.row_index));
         if self.error {
             print!("{}", color::Fg(color::Red));
         } else if self.is_selected {
@@ -962,10 +990,9 @@ impl EditRow {
         } else {
             print!("{}", color::Fg(color::Green));
         }
+        print!("{}{}", self.value, color::Fg(color::Reset));
         if save_pos {
-            print!("{}{}{}", self.value, color::Fg(color::Reset), cursor::Restore);
-        } else {
-            print!("{}{}", self.value, color::Fg(color::Reset));
+            print!("{}", cursor::Restore);
         }
         stdout().flush().unwrap();
     }
@@ -998,6 +1025,22 @@ impl EditRow {
     }
     fn set_spacing(&mut self, width: u16) {
         self.spacing = width
+    }
+    fn change_recipe_head(&mut self, data: &ProductList) {
+        let mut product_session = InteractiveProductTerm::new("".to_string(), data);
+
+        if data.contains(&ProductKind { name: self.head.clone() }) {
+            print!("{}{}", Goto((self.head.len() + 1) as u16, self.row_index as u16), clear::CurrentLine);
+            product_session.input = self.head.clone();
+        } else {
+            print!("{}{}", Goto(1, self.row_index as u16), clear::CurrentLine)
+        }
+        product_session.start_session();
+        match product_session.input_get_product() {
+            None => {}
+            Some(product) => { self.head = product.kind.name.clone() }
+        };
+        self.select(false);
     }
 }
 
