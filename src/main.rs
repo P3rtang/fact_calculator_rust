@@ -12,7 +12,7 @@ enum CommandKind {
     List,
     New,
     Edit,
-    // TODO: add set command (for basic settings like smelter speed)
+    // TODO: add Conf command (for basic settings like smelter speed)
 }
 
 struct Command {
@@ -58,23 +58,6 @@ impl Command {
             CommandKind::List    => print!("{}", data),
             CommandKind::New     => {
                 match &self.args[..] {
-                    [token, amount, time,..] => {
-                        let mut recipe = Vec::new();
-                        let info = (amount.text.parse::<i8>().unwrap(), time.text.parse::<f32>().unwrap());
-
-                        while let Some(input) = new_product_recipe_dialog() {
-                            let rec_part = RecipePart { kind: ProductKind { name: input.0.clone() }, amount: input.1.clone() };
-                            if data.contains(&rec_part.kind) {
-                                recipe.push(rec_part)
-                            } else {
-                                ValueError(input.0.clone(), input.1 as usize + 8, format!("The given subproduct {} is not defined", input.0)).show();
-                            }
-                        }
-                        println!("\nAdding product:\n \t{} [production amount:: {}, production time:: {}]", token.text, info.0, info.1);
-                        for part in recipe {
-                            println!("Adding recipe:\n{}", part)
-                        }
-                    }
                     [token, ..] => {
                         SyntaxError(token.clone().text, token.loc, format!("Incorrect use of the `new` command")).show()
                     }
@@ -759,6 +742,21 @@ fn parse_lexer(lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
     } else { None }
 }
 
+fn parse_terminal() -> Option<Key> {
+    let stdin = stdin();
+    let _stdout = stdout().into_raw_mode().unwrap();
+    for c in stdin.events() {
+        let evt = c.unwrap();
+        return match evt {
+            Event::Key(key) => {
+                Some(key)
+            }
+            _ => { None }
+        }
+    }
+    return None
+}
+
 struct InteractiveProductTerm {
     input: String,
     offset: usize,
@@ -1127,53 +1125,10 @@ impl EditRow {
     }
 }
 
-fn parse_terminal() -> Option<Key> {
-    let stdin = stdin();
-    let _stdout = stdout().into_raw_mode().unwrap();
-    for c in stdin.events() {
-        let evt = c.unwrap();
-        return match evt {
-            Event::Key(key) => {
-                Some(key)
-            }
-            _ => { None }
-        }
-    }
-    return None
-}
-
-fn new_product_recipe_dialog() -> Option<(String, i8)> {
-    let mut io_input = String::new();
-    println!("recipe part:: ");
-    print!("product >>");
-    stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
-    stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
-    let mut lexer = Lexer::new(io_input.clone(), io_input.chars());
-
-    return match lexer.next() {
-        Some(token) if token.kind == TokenKind::Expr => {
-            match lexer.next() {
-                Some(amount) => {
-                    match amount.clone().text.parse::<i8>() {
-                        Ok(int) => { Some((token.text, int)) }
-                        Err(_) => {
-                            ValueError(amount.text, amount.loc + 13, format!("Expected a number")).show();
-                            None
-                        }
-                    }
-                }
-                _ => None
-            }
-        }
-        _ => None
-    }
-}
-
 fn main() {
     let file_lexer = lexing_file("products.csv");
     let mut data = ProductList::from_file_tokens(&file_lexer);
     let settings = Settings::from_lexer(&file_lexer);
-    // print!("{:?}", data);
     println!("------------------------------------------------------");
     println!("Type Calc without arguments to get a guided calculation");
     println!("Type Help to get a list of all possible commands");
