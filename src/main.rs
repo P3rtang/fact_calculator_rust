@@ -531,25 +531,26 @@ impl <Char: Iterator<Item=char>> Lexer<Char> {
 
 struct MatchInput {
     index: usize,
+    data: Box<ProductList>
 }
 
 impl MatchInput {
-    fn new() -> Self {
-        return MatchInput{index: 0}
+    fn new(data: Box<ProductList>) -> Self {
+        return MatchInput{index: 0, data}
     }
-    fn find (&mut self, input: String, data: Box<ProductList>) -> Option<(ProductKind, usize)> {
+    fn find (&mut self, input: &String) -> Option<(ProductKind, usize)> {
         if input == "" { return None}
         let mut temp_index = self.index;
         // TODO: factor out these two loops into 1 function
-        for product in data.clone().list.into_iter() {
-            if product.kind.name.starts_with(&input) {
+        for product in self.data.list.clone().into_iter() {
+            if product.kind.name.starts_with(input) {
                 if temp_index > 0 { temp_index -= 1 }
                 else { return Some((product.kind, 0)) }
             }
         }
-        for product in data.clone().list {
-            if let Some(place) = product.kind.name.find(&input) {
-                if !(product.kind.name.starts_with(&input)) {
+        for product in self.data.list.clone() {
+            if let Some(place) = product.kind.name.find(input) {
+                if !(product.kind.name.starts_with(input)) {
                     if temp_index > 0 { temp_index -= 1 }
                     else { return Some((product.kind, place)) }
                 }
@@ -557,7 +558,7 @@ impl MatchInput {
         }
         if temp_index > 0 {
             self.index = 0;
-            return self.find(input, data)
+            return self.find(input)
         }
         return None
     }
@@ -781,15 +782,40 @@ impl InteractiveProductTerm {
         self.offset      = new_text.len() + 1;
         self.offset_text = new_text;
     }
-    fn input_get_product(&self) -> Option<&Product> {
-        self.search_data.get_product( &ProductKind { name: self.input.clone() } )
-    }
+    fn input_get_product(&self) -> Option<&Product> { self.search_data.get_product( &ProductKind { name: self.input.clone() } ) }
     fn start_session(&mut self) {
         // TODO: refactor this section so it supports the interactive edit session
-        let mut in_match = MatchInput::new();
+        let mut in_match = MatchInput::new(self.search_data.clone());
         self.is_running = true;
         print!("{}", self.offset_text);
         stdout().flush().expect("IOError could not flush stdout");
+
+        fn set_match_color(this: &mut InteractiveProductTerm, input_match: &mut MatchInput, y_pos: u16) {
+            match input_match.find(&this.input) {
+                Some((pkind, index)) => {
+                    print!(
+                        "{}{}{}{}",
+                        Goto(this.offset as u16, y_pos),
+                        color::Fg(color::Rgb(0x77, 0x77, 0x77)),
+                        clear::AfterCursor,
+                        pkind
+                    );
+                    print!("{}{}{}{}", Goto((index + this.offset) as u16, y_pos), color::Fg(color::Green), this.input, color::Fg(color::Reset));
+                }
+                None if this.input == "" => {
+                    print!(
+                        "{}{}product{}{}",
+                        Goto(this.offset as u16, y_pos), color::Fg(color::Rgb(0x77, 0x77, 0x77)),
+                        clear::AfterCursor, Goto(this.offset as u16, y_pos)
+                    )
+                }
+                None => {
+                    print!("{}{}", Goto(this.offset as u16, y_pos), clear::AfterCursor);
+                    print!("{}{}{}{}", Goto((this.offset) as u16, y_pos), color::Fg(color::Red), this.input, color::Fg(color::Reset));
+                }
+            };
+        }
+
         while self.is_running {
             let mut stdout = stdout().into_raw_mode().unwrap();
             let (_, y) = match stdout.cursor_pos() {
@@ -799,23 +825,7 @@ impl InteractiveProductTerm {
                     break
                 }
             };
-            match in_match.find(self.input.clone(), self.search_data.clone()) {
-                Some((pkind, index)) => {
-                    print!(
-                        "{}{}{}{}",
-                        Goto(self.offset as u16, y),
-                        color::Fg(color::Rgb(0x77, 0x77, 0x77)),
-                        clear::AfterCursor,
-                        pkind
-                    );
-                    print!("{}{}{}{}", Goto((index + self.offset) as u16, y), color::Fg(color::Green), self.input, color::Fg(color::Reset));
-                }
-                None if self.input == "" => { print!("{}{}product{}{}", Goto(self.offset as u16, y), color::Fg(color::Rgb(0x77, 0x77, 0x77)), clear::AfterCursor, Goto(self.offset as u16, y)) }
-                None => {
-                    print!("{}{}", Goto(self.offset as u16, y), clear::AfterCursor);
-                    print!("{}{}{}{}", Goto((self.offset) as u16, y), color::Fg(color::Red), self.input, color::Fg(color::Reset));
-                }
-            };
+            set_match_color(self, &mut in_match, y);
             stdout.flush().unwrap();
             let key = parse_terminal();
             match key {
@@ -827,17 +837,22 @@ impl InteractiveProductTerm {
                     if self.search_data.contains(&ProductKind {name: self.input.clone()}) {
                         self.is_running = false;
                     } else {
-                        match in_match.find(self.input.clone(), self.search_data.clone()) {
-                            Some((pkind, _)) => { self.input = pkind.name; self.is_running = false }
+                        match in_match.find(&self.input) {
+                            Some((pkind, _)) => {
+                                self.input = pkind.name;
+                                set_match_color(self, &mut in_match, y);
+                                self.is_running = false;
+                            }
                             None => {}
                         };
                     }
                 }
                 Some(Key::Char('\t')) => {
-                    self.input = match in_match.find(self.input.clone(), self.search_data.clone()) {
+                    self.input = match in_match.find(&self.input) {
                         Some((pkind, _)) => {pkind.name}
                         None => self.input.clone()
                     };
+                    // setting the pattern matching index back to zero
                     in_match.index = 0;
                 }
                 Some(Key::Up)   => { if in_match.index > 0 { in_match.index -= 1 } }
