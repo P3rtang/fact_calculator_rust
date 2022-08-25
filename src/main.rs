@@ -3,15 +3,18 @@ use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, c
 use termion::cursor::{DetectCursorPos, Goto};
 use crate::Error::{InputError, IOError, KeyError, ParsingError, SyntaxError, ValueError};
 
-static QUIT: bool = false;
+macro_rules! pkind {
+    ($name:expr) => { ProductKind { name: $name.to_string() } }
+}
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum CommandKind {
     Help,
     Calc,
     List,
     New,
     Edit,
+    Exit,
     // TODO: add Conf command (for basic settings like smelter speed)
 }
 
@@ -21,7 +24,7 @@ struct Command {
 }
 
 impl Command {
-    fn run(&self, data: &mut ProductList, settings: &Settings) {
+    fn run(&self, data: &mut ProductList, settings: &Settings, file_data: &mut FileData) {
         match &self.kind {
             CommandKind::Help    => println!("{}", self),
             CommandKind::Calc    => {
@@ -58,11 +61,7 @@ impl Command {
             CommandKind::List    => print!("{}", data),
             CommandKind::New     => {
                 match &self.args[..] {
-                    [token, ..] => {
-                        SyntaxError(token.clone().text, token.loc, format!("Incorrect use of the `new` command")).show()
-                    }
-
-                    [] => {
+                    [Token{kind:TokenKind::NewLine, ..}] => {
                         // TODO: add a default for product and use it here
                         let new_template = Product {
                             kind: ProductKind { name: "new_name".to_string() },
@@ -77,13 +76,17 @@ impl Command {
                         let new_product = interactive_session.get_product();
                         if !interactive_session.escape_pressed {
                             data.add(new_product.clone());
-                            save_product_to_file(new_product, "products.csv".to_string())
+                            file_data.add_line(new_product);
+                            file_data.save_to_file();
                         }
                     }
+                    [token, ..] => {
+                        SyntaxError(token.clone().text, token.loc, format!("Incorrect use of the `new` command")).show()
+                    }
+                    _ => println!("Unreachable")
                 }
             }
             CommandKind::Edit => {
-                // TODO: save edited products to the csv
                 println!("Select a product to edit");
 
                 let mut interactive_product_session = InteractiveProductTerm::new(format!("product >> "), data);
@@ -94,12 +97,17 @@ impl Command {
                     if !interactive_edit_session.escape_pressed {
                         let edited_product = interactive_edit_session.get_product();
                         data.remove(product);
-                        data.add(edited_product);
+                        data.add(edited_product.clone());
+                        file_data.edit_product_line(product, edited_product);
+                        file_data.save_to_file();
                     }
                 } else {
                     println!();
                     InputError("".to_string(), 9, format!("Could not find {}", interactive_product_session.input)).show();
                 }
+            }
+            CommandKind::Exit => {
+
             }
         }
     }
@@ -290,12 +298,40 @@ impl Product {
         let recipe_products = RecipePart::parse_recipe(&tokens[5..]);
 
         return Product {
-            kind: ProductKind{ name: tokens[1].text.clone() },
+            kind: pkind!(tokens[1].text),
             time: tokens[2].text.parse().unwrap(),
             amount: tokens[3].text.parse().unwrap(),
             machine: tokens[4].text.parse().unwrap(),
             recipe_products
         }
+    }
+    fn to_tokens(&self) -> Vec<Token> {
+        let mut return_vec = vec![Token { kind: TokenKind::GreaterThan, text: ">".to_string(), loc: 0}];
+        let chars = self.to_string(' ');
+        let lexer = Lexer::new(chars.chars());
+        let mut vec_lexer = lexer.collect::<Vec<Token>>();
+        return_vec.append(&mut vec_lexer);
+        return_vec
+    }
+    #[allow(dead_code)]
+    fn to_string(&self, delim: char) -> String {
+        let mut return_str = String::new();
+
+        return_str.push_str(self.kind.name.as_str());
+        return_str.push(delim);
+        return_str.push_str(self.time.to_string().as_str());
+        return_str.push(delim);
+        return_str.push_str(self.amount.to_string().as_str());
+        return_str.push(delim);
+        return_str.push_str(self.machine.to_string().as_str());
+        return_str.push(delim);
+        for r_part in &self.recipe_products {
+            return_str.push_str(r_part.kind.name.as_str());
+            return_str.push(delim);
+            return_str.push_str(r_part.amount.to_string().as_str());
+            return_str.push(delim);
+        }
+        return return_str
     }
 }
 
@@ -378,8 +414,8 @@ impl ProductList {
         let mut list = vec![];
         for line in data {
             match line.kind {
-                DataKind::Setting    => {}
-                DataKind::Product(_) => { list.push(Product::from_lexer(&line.tokens)) }
+                LineKind::Product(_) => { list.push(Product::from_lexer(&line.tokens)) }
+                _ => {}
             }
         }
         return ProductList { list }
@@ -395,8 +431,8 @@ impl Settings {
         let mut map: HashMap<MachineKind, f32> = HashMap::new();
         for line in data {
             match line.kind {
-                DataKind::Setting    => { map.insert(line.tokens[1].text.parse().unwrap(), line.tokens[2].text.parse().unwrap()); }
-                DataKind::Product(_) => {}
+                LineKind::Setting    => { map.insert(line.tokens[1].text.parse().unwrap(), line.tokens[2].text.parse().unwrap()); }
+                _ => {}
             }
         }
         return Settings { speed: map }
@@ -478,7 +514,6 @@ impl Token {
 
 #[derive(Debug, Clone)]
 struct Lexer<Char: Iterator<Item=char>> {
-    input: String,
     chars: Peekable<Char>,
     index: usize,
 }
@@ -497,6 +532,7 @@ impl <Char: Iterator<Item=char>> Iterator for Lexer<Char> {
                 '#' => Some(Token::new(TokenKind::Comment, text, self.index)),
                 '-' => {
                     if self.chars.peek() == Some(&('-')) {
+                        text.push('-');
                         self.chars.next();
                         self.index += 1;
                         Some(Token::new(TokenKind::DoubleDash, text, self.index))
@@ -508,24 +544,21 @@ impl <Char: Iterator<Item=char>> Iterator for Lexer<Char> {
                 '\n' => Some(Token::new(TokenKind::NewLine, text, self.index)),
                 '>'  => Some(Token::new(TokenKind::GreaterThan, text, self.index)),
                 char if char.is_alphanumeric() => {
-                    #[allow(irrefutable_let_patterns)]
-                    while let char = self.chars.peek().unwrap() {
-                        if char.is_alphanumeric() || char.clone() == '_' || char.clone() == '.'{
-                            text.push(self.chars.next().unwrap());
-                            self.index += 1;
-                        } else { break }
+                    while let Some(char) = self.chars.next_if(|char| { char.is_alphanumeric() || char.clone() == '_' || char.clone() == '.' } ) {
+                        text.push(char);
+                        self.index += 1;
                     };
                     return Some(Token::new(TokenKind::Expr, text, self.index))
                 }
-                char => { SyntaxError(self.input.clone(), self.index, format!("Unexpected Character {}", char)).show(); None}
+                char => { SyntaxError(char.to_string(), self.index, format!("Unexpected Character {}", char)).show(); None}
             }
         } else { None }
     }
 }
 
 impl <Char: Iterator<Item=char>> Lexer<Char> {
-    fn new(input: String, chars: Char) -> Self{
-        Self { input, chars: chars.peekable(), index: 0 }
+    fn new(chars: Char) -> Self{
+        Self { chars: chars.peekable(), index: 0 }
     }
 }
 
@@ -611,21 +644,6 @@ fn get_input_i16(input_hint: String) -> i16 {
     return parsed_i16
 }
 
-fn save_product_to_file(product: Product, file: String) {
-    let mut line = format!("> {},{},{},{}", product.kind.name, product.time, product.amount, product.machine);
-    for rec_part in product.recipe_products {
-        line.push_str(&format!(",{}", rec_part))
-    }
-    let mut file = fs::OpenOptions::new()
-        .append(true)
-        .open(file)
-        .unwrap();
-
-    if let Err(e) = write!(file, "{}", line) {
-        eprintln!("Couldn't write to file: {}", e);
-    }
-}
-
 fn generate_result(node: Node, data: &ProductList, settings: &Settings) -> Vec<Node> {
     let mut result_vec = vec![];
     let sub = data.get_product(&node.product_kind);
@@ -662,24 +680,83 @@ fn generate_result(node: Node, data: &ProductList, settings: &Settings) -> Vec<N
     result_vec
 }
 
-#[derive(PartialEq, Eq, Debug)]
-enum DataKind {
+#[derive(PartialEq, Eq, Debug, Clone)]
+enum LineKind {
     Setting,
     Product(ProductKind),
+    Comment(String),
+    Empty,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct LineData {
     row: i8,
-    kind: DataKind,
+    kind: LineKind,
     tokens: Vec<Token>,
 }
 
-fn lexing_file(filename: &str) -> Vec<LineData> {
-    let mut file_data = vec![];
+impl LineData {
+    fn from_product(row: i8, product: Product) -> Self {
+        return LineData { row, kind: LineKind::Product(product.kind.clone()), tokens: product.to_tokens() }
+    }
+}
+
+#[derive(Clone)]
+struct FileData {
+    filename: String,
+    line_data: Vec<LineData>,
+}
+
+impl FileData {
+    fn save_to_file(&self) {
+        let file_data = self.create_string_from_tokens();
+
+        let mut file = fs::OpenOptions::new().write(true).open(&self.filename).expect("failed to open file");
+        write!(file, "{}", file_data).expect("failed to write")
+    }
+    fn create_string_from_tokens(&self) -> String {
+        let mut return_str = "".to_string();
+
+        for line in &self.line_data {
+            for token in &line.tokens {
+                return_str.push_str(token.text.as_str());
+                match token.kind {
+                    TokenKind::GreaterThan => return_str.push(' '),
+                    TokenKind::DoubleDash  => return_str.push(' '),
+                    TokenKind::Comment     => return_str.push(' '),
+                    _                      => return_str.push(','),
+                }
+            }
+            return_str.push('\n');
+        }
+        return return_str
+    }
+    fn edit_product_line(&mut self, old_prod: &Product, new_prod: Product) {
+        if let Some(index) = self.get_line_index(&old_prod.kind) {
+            let _line = self.line_data.remove(index);
+            self.line_data.push(LineData::from_product(self.line_data.len() as i8, new_prod))
+        } else {}
+    }
+    fn get_line_index(&self, pkind: &ProductKind) -> Option<usize> {
+        for (index, line) in self.line_data.clone().into_iter().enumerate() {
+            match &line.kind {
+                LineKind::Product(kind) if kind == pkind => { return Some(index) }
+                _ => {}
+            }
+        }
+        return None
+    }
+    fn add_line(&mut self, product: Product) {
+        self.line_data.push(LineData::from_product(self.line_data.len() as i8, product))
+    }
+}
+
+// TODO: add this in FileData struct
+fn lexing_file(filename: &str) -> FileData {
+    let mut line_data = vec![];
     let file = fs::read_to_string(filename).expect("failed to read file");
-    let mut file_lexer = Lexer::new( file.clone(), file.chars() );
+    let mut file_lexer = Lexer::new( file.chars() );
 
     // values needed for looping over the file data and storing them in a LineData struct
     let mut parsing = true;
@@ -693,11 +770,19 @@ fn lexing_file(filename: &str) -> Vec<LineData> {
                     TokenKind::NewLine => {
                         if !tokens.is_empty() {
                             match tokens[0].kind {
-                                TokenKind::Comment     => {}
-                                TokenKind::GreaterThan => { file_data.push(LineData { row, kind: DataKind::Product(ProductKind{ name: tokens[1].text.clone() }), tokens }) }
-                                TokenKind::DoubleDash  => { file_data.push(LineData { row, kind: DataKind::Setting, tokens }) }
+                                TokenKind::Comment     => {
+                                    let mut comment = String::new();
+                                    for token in &tokens {
+                                        comment.push_str(format!(" {}", token.text).as_str())
+                                    }
+                                    line_data.push(LineData { row, kind: LineKind::Comment(comment), tokens})
+                                }
+                                TokenKind::GreaterThan => { line_data.push(LineData { row, kind: LineKind::Product(ProductKind{ name: tokens[1].text.clone() }), tokens }) }
+                                TokenKind::DoubleDash  => { line_data.push(LineData { row, kind: LineKind::Setting, tokens }) }
                                 _                      => ParsingError(tokens[0].text.clone(), 0, format!("Unexpected Token in products.csv")).raise()
                             }
+                        } else {
+                            line_data.push( LineData { row, kind: LineKind::Empty, tokens } )
                         }
                         row += 1;
                         tokens = vec![];
@@ -712,7 +797,7 @@ fn lexing_file(filename: &str) -> Vec<LineData> {
             }
         }
     }
-    return file_data
+    return FileData { filename: filename.to_string(), line_data }
 }
 
 fn parse_lexer(lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
@@ -720,7 +805,7 @@ fn parse_lexer(lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
         match token.kind {
             TokenKind::Expr => {
                 match token.text.to_ascii_lowercase().as_str() {
-                    "exit" => exit(0),
+                    "exit" => Some(Command { kind:CommandKind::Exit, args: vec![] }),
                     "new"  => {
                         let args:Vec<Token> = lexer.collect();
                         Some(Command { kind:CommandKind::New, args })
@@ -1141,19 +1226,27 @@ impl EditRow {
 }
 
 fn main() {
-    let file_lexer = lexing_file("products.csv");
-    let mut data = ProductList::from_file_tokens(&file_lexer);
-    let settings = Settings::from_lexer(&file_lexer);
+    let mut file_lexer = lexing_file("products.csv");
+    let mut data = ProductList::from_file_tokens(&file_lexer.line_data);
+    let settings = Settings::from_lexer(&file_lexer.line_data);
+
+    let mut quit = false;
     println!("------------------------------------------------------");
     println!("Type Calc without arguments to get a guided calculation");
     println!("Type Help to get a list of all possible commands");
     println!("------------------------------------------------------");
-    while !QUIT {
+    while !quit {
         let mut io_input = String::new();
         print!("\n> ");
         stdout().flush().expect("ERROR: Failed to print io::stdout buffer");
         stdin().read_line(&mut io_input).expect("ERROR: Failed to read io::stdin");
-        let mut lexer = Lexer::new(io_input.clone(), io_input.chars());
-        if let Some(command) = parse_lexer(&mut lexer) { command.run(&mut data, &settings) } else {};
+        let mut lexer = Lexer::new(io_input.chars());
+        if let Some(command) = parse_lexer(&mut lexer) {
+            if command.kind == CommandKind::Exit {
+                file_lexer.save_to_file();
+                quit = true;
+            }
+            command.run(&mut data, &settings, &mut file_lexer)
+        } else {};
     }
 }
