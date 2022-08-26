@@ -20,6 +20,6 @@
 > green_science,10,1,factory,inserter,1,transport_belt,2,
 > transport_belt,0.25,1,factory,single_c_engine,1,iron_plate,1,
 > stone,1,1,miner,
-> glass,4,1,smelter,sand,4,
 > steel,16,1,smelter,iron_plate,5,
 > sand,0.5,2,factory,stone,1,
+> glass,4,1,smelter,sand,4,
