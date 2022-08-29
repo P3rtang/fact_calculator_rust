@@ -1,6 +1,7 @@
 use std::{fs, fmt::{Formatter, Display, Result}, str::FromStr, io::{stdout, stdin, Write}, cmp::{max, Ordering}, iter::Peekable, process::exit, str::Chars, collections::HashMap};
-use termion::{color, event::{Event, Key}, input::{TermRead}, raw::IntoRawMode, cursor, clear, style};
+use termion::{color, event::{Event, Key, MouseEvent}, input::{TermRead}, raw::IntoRawMode, cursor, clear, style};
 use termion::cursor::{DetectCursorPos, Goto};
+use termion::input::MouseTerminal;
 use crate::Error::{InputError, IOError, KeyError, ParsingError, SyntaxError, ValueError};
 
 macro_rules! pkind {
@@ -32,7 +33,7 @@ impl Command {
                     [token1, token2] => {
                         let node = Node { product_kind: ProductKind { name: token1.clone().text }, amount: token2.text.parse().unwrap() };
                         let tree = Tree::new(node, 0, data, settings);
-                        tree.traverse()
+                        tree.traverse(None)
                     }
                     [err,..] if err.kind != TokenKind::NewLine => {
                         SyntaxError(err.clone().text, err.loc, format!("expected 2 arguments for calc found {}: {}", self.args.len(), err.text)).show()
@@ -52,8 +53,8 @@ impl Command {
                             Err(_) => { ValueError(amount, 9, format!("Could not interpret this as a number defaulting to 1.0")).show(); 1.0 }
                         };
                         let node = Node { product_kind: ProductKind { name: product }, amount: parse_amount };
-                        let tree = Tree::new(node, 0, data ,settings);
-                        tree.traverse()
+                        let mut tree = Tree::new(node, 0, data, settings);
+                        tree.print(None);
                     }
                     [..] => {}
                 }
@@ -106,9 +107,7 @@ impl Command {
                     InputError("".to_string(), 9, format!("Could not find {}", interactive_product_session.input)).show();
                 }
             }
-            CommandKind::Exit => {
-
-            }
+            CommandKind::Exit => {}
         }
     }
 }
@@ -154,22 +153,22 @@ impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
             SyntaxError(_, loc, info) => {
-                writeln!(f, "{}^ SyntaxError: {}", " ".repeat(*loc), info)
+                writeln!(f, "{}^ SyntaxError: {}",  " ".repeat(*loc), info)
             }
             KeyError(_, loc, info)    => {
-                writeln!(f, "{}^ KeyError: {}",    " ".repeat(*loc), info)
+                writeln!(f, "{}^ KeyError: {}",     " ".repeat(*loc), info)
             }
             ValueError(_, loc, info)  => {
-                writeln!(f, "{}^ ValueError: {}",  " ".repeat(*loc), info)
+                writeln!(f, "{}^ ValueError: {}",   " ".repeat(*loc), info)
             }
             IOError(_, loc, info)  => {
-                writeln!(f, "{}^ IOError: {}",     " ".repeat(*loc), info)
+                writeln!(f, "{}^ IOError: {}",      " ".repeat(*loc), info)
             }
             InputError(_, loc, info)  => {
-                writeln!(f, "{}^ InputError: {}",  " ".repeat(*loc), info)
+                writeln!(f, "{}^ InputError: {}",   " ".repeat(*loc), info)
             }
             ParsingError(_, loc, info)  => {
-                writeln!(f, "{}^ ParsingError: {}",  " ".repeat(*loc), info)
+                writeln!(f, "{}^ ParsingError: {}", " ".repeat(*loc), info)
             }
         }
     }
@@ -283,8 +282,8 @@ impl Ord for Product {
 
 impl Product {
     #[allow(dead_code)]
-    fn new(kind: ProductKind, time: f32, amount: i8, crafter_kind: MachineKind, recipe_products: Vec<RecipePart>) -> Self {
-        let product = Product{ kind, time, amount, machine: crafter_kind, recipe_products};
+    fn new(kind: String, time: f32, amount: i8, crafter_kind: MachineKind, recipe_products: Vec<RecipePart>) -> Self {
+        let product = Product{ kind: pkind!(kind), time, amount, machine: crafter_kind, recipe_products};
         product
     }
     fn from_lexer(tokens: &Vec<Token>) -> Self {
@@ -451,43 +450,117 @@ impl Display for Node {
     }
 }
 
+impl Node {
+    fn generate_result(&self, product_data: &ProductList, settings: &Settings) -> Vec<Node> {
+        let mut result_vec = vec![];
+        let sub = product_data.get_product(&self.product_kind);
+        match sub {
+            None => {
+                ValueError( format!("{}", self.to_string()), 0, format!("When calculating {} was found in the recipe but not in 'products.csv'", self
+                    .to_string())).show()
+            },
+            Some(product) => {
+                // multiplier is the machine type multiplier defined in products.csv
+                let multiplier = settings.speed[&product.machine];
+                // scalar references items per second
+                let scalar = self.amount / product.time as f32 * multiplier;
+                for recipe_part in product.recipe_products.clone() {
+                    let sub_time = product_data.get_product(&recipe_part.kind);
+                    match sub_time {
+                        Some(sub_product) => {
+                            result_vec.push(
+                                Node {
+                                    product_kind: recipe_part.kind,
+                                    amount: scalar / settings.speed[&sub_product.machine] * recipe_part.amount as f32 * (sub_product.time / (sub_product.amount as f32)),
+                                }
+                            )
+                        },
+                        None => {
+                            ValueError(
+                                format!("{}", recipe_part.kind), 0,
+                                format!("When calculating '{}', '{}' was found in the recipe but not in 'products.csv', ignoring this product", self
+                                    .product_kind, recipe_part.kind)
+                            ).show()
+                        }
+                    }
+                }
+            }
+        }
+        result_vec
+    }
+}
+
 struct Tree {
     parent: Node,
     indent: usize,
     children: Vec<Box<Tree>>,
 }
 
-impl Display for Tree {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        if self.indent > 0 {
-            let indentation = "    ".repeat(self.indent - 1 as usize);
-            write!(f, "{}    {}", indentation, self.parent)
-        } else {
-            write!(f, "{}", self.parent)
-        }
-    }
-}
-
+#[allow(dead_code)]
 impl Tree {
     fn new (node: Node, indent: usize, data: &ProductList, settings: &Settings) -> Tree {
         let mut children = vec![];
-        let node_calc = generate_result(node.clone(), data, settings);
+        let node_calc = node.generate_result(data, settings);
         for sub_node in node_calc {
-            let boxed_sub_tree = Box::new(Tree::new(sub_node, indent + 1, data, settings));
+            let boxed_sub_tree = Box::new(Tree::new(sub_node, indent + 3, data, settings));
             children.push(boxed_sub_tree)
         }
         let tree = Tree { parent: node, indent, children };
         return tree
     }
-    fn traverse (&self) {
-        println!("{}", self);
-        for node in &self.children {
-            node.traverse()
+    fn traverse (&self, depth: Option<u16>) {
+        let mut stdout = stdout().into_raw_mode().unwrap();
+        let start_position = stdout.cursor_pos().unwrap().1;
+        let indentation = " ".repeat(self.indent as usize);
+        println!("{}{}{}>{} {}", Goto(1, start_position), indentation, color::Fg(color::Magenta), color::Fg(color::Reset), self.parent);
+        if let Some(depth) = depth {
+            if depth > 0 {
+                for node in &self.children {
+                    node.traverse(Some(depth - 1))
+                }
+            }
+        } else {
+            for node in &self.children {
+                node.traverse(None)
+            }
         }
+    }
+    fn start_session(&mut self) {
+        let stdin = stdin();
+        let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
+        stdout.flush().unwrap();
+
+        self.print(None);
+
+        for c in stdin.events() {
+            let evt = c.unwrap();
+            match evt {
+                Event::Key(Key::Esc) => break,
+                Event::Mouse(me) => {
+                    match me {
+                        MouseEvent::Release(_, _) => {
+                            
+                        },
+                        _ => (),
+                    }
+                }
+                _ => {}
+            }
+            stdout.flush().unwrap();
+        }
+    }
+    fn hide_all(&self) {
+
+    }
+    fn print(&mut self, depth: Option<u16>) {
+        print!("{}{}", clear::All, Goto(1, 1));
+        stdout().flush().unwrap();
+        self.traverse(depth)
     }
     // TODO: make tree output interactive with tabs
     // TODO: add search function to tree to get the accumulated value for a certain product
 }
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 enum TokenKind {
@@ -597,87 +670,6 @@ impl MatchInput {
     }
     fn _next (&mut self, _input: String, _data: &ProductList) {
     }
-}
-
-#[allow(dead_code)]
-fn get_input(input_hint: String, strip_nl: bool) -> String {
-    let mut input = String::new();
-
-    print!("{}", input_hint);
-    stdout().flush().expect("IOError could not flush stdout");
-    stdin().read_line(&mut input).expect("IOError could not read stdin");
-
-    if strip_nl && input.len() > 1 {
-        input.drain((input.len() - 1)..);
-    }
-
-    return input
-}
-
-#[allow(dead_code)]
-fn get_input_f32(input_hint: String) -> f32 {
-    let mut float = String::new();
-
-    print!("{}", input_hint);
-    stdout().flush().expect("IOError could not flush stdout");
-    stdin().read_line(&mut float).expect("IOError could not read stdin");
-
-    let parsed_f32 = match float.clone().drain(..(float.len() - 1)).as_str().parse::<f32>() {
-        Ok(out) => out,
-        Err(_) => { ValueError(float, 9, format!("Could not interpret this as a number defaulting to 1.0")).show(); 1.0}
-    };
-    return parsed_f32
-}
-
-#[allow(dead_code)]
-fn get_input_i16(input_hint: String) -> i16 {
-    let mut int = String::new();
-
-    print!("{}", input_hint);
-    stdout().flush().expect("IOError could not flush stdout");
-    stdin().read_line(&mut int).expect("IOError could not read stdin");
-
-    let parsed_i16 = match int.clone().drain(..(int.len() - 1)).as_str().parse::<i16>() {
-        Ok(out) => out,
-        Err(_) => { ValueError(int, 9, format!("Could not interpret this as a number defaulting to 1")).show(); 1}
-    };
-    return parsed_i16
-}
-
-fn generate_result(node: Node, data: &ProductList, settings: &Settings) -> Vec<Node> {
-    let mut result_vec = vec![];
-    let sub = data.get_product(&node.product_kind);
-    match sub {
-        None => {
-            ValueError( format!("{}", node.to_string()), 0, format!("When calculating {} was found in the recipe but not in 'products.csv'", node.to_string())).show()
-        },
-        Some(product) => {
-            // multiplier is the machine type multiplier defined in products.csv
-            let multiplier = settings.speed[&product.machine];
-            // scalar references items per second
-            let scalar = node.amount / product.time as f32 * multiplier;
-            for recipe_part in product.recipe_products.clone() {
-                let sub_time = data.get_product(&recipe_part.kind);
-                match sub_time {
-                    Some(sub_product) => {
-                        result_vec.push(
-                            Node {
-                                product_kind: recipe_part.kind,
-                                amount: scalar / settings.speed[&sub_product.machine] * recipe_part.amount as f32 * (sub_product.time / (sub_product.amount as f32)),
-                            }
-                        )
-                    },
-                    None => {
-                        ValueError(
-                            format!("{}", recipe_part.kind), 0,
-                            format!("When calculating '{}', '{}' was found in the recipe but not in 'products.csv', ignoring this product", node.product_kind, recipe_part.kind)
-                        ).show()
-                    }
-                }
-            }
-        }
-    }
-    result_vec
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -828,17 +820,12 @@ fn parse_lexer(lexer: &mut Lexer<Chars<'_>>) -> Option<Command> {
     } else { None }
 }
 
-fn parse_terminal() -> Option<Key> {
+fn parse_terminal() -> Option<Event> {
     let stdin = stdin();
-    let _stdout = stdout().into_raw_mode().unwrap();
+    let _stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
     for c in stdin.events() {
         let evt = c.unwrap();
-        return match evt {
-            Event::Key(key) => {
-                Some(key)
-            }
-            _ => { None }
-        }
+        return Some(evt)
     }
     return None
 }
@@ -912,38 +899,40 @@ impl InteractiveProductTerm {
             };
             set_match_color(self, &mut in_match, y);
             stdout.flush().unwrap();
-            let key = parse_terminal();
-            match key {
-                Some(Key::Backspace) => {
-                    if self.input.is_empty() {}
-                    else { self.input.remove(self.input.len() - 1); }
-                }
-                Some(Key::Char('\n')) => {
-                    if self.search_data.contains(&ProductKind {name: self.input.clone()}) {
-                        self.is_running = false;
-                    } else {
-                        match in_match.find(&self.input) {
-                            Some((pkind, _)) => {
-                                self.input = pkind.name;
-                                set_match_color(self, &mut in_match, y);
-                                self.is_running = false;
-                            }
-                            None => {}
-                        };
+            let event = parse_terminal();
+            match event {
+                Some(Event::Key(key)) => match key {
+                    Key::Backspace => {
+                        if self.input.is_empty() {} else { self.input.remove(self.input.len() - 1); }
                     }
-                }
-                Some(Key::Char('\t')) => {
-                    self.input = match in_match.find(&self.input) {
-                        Some((pkind, _)) => {pkind.name}
-                        None => self.input.clone()
-                    };
-                    // setting the pattern matching index back to zero
-                    in_match.index = 0;
-                }
-                Some(Key::Up)   => { if in_match.index > 0 { in_match.index -= 1 } }
-                Some(Key::Down) => { in_match.index += 1 }
-                Some(Key::Char(char)) => {
-                    self.input.push(char)
+                    Key::Char('\n') => {
+                        if self.search_data.contains(&ProductKind { name: self.input.clone() }) {
+                            self.is_running = false;
+                        } else {
+                            match in_match.find(&self.input) {
+                                Some((pkind, _)) => {
+                                    self.input = pkind.name;
+                                    set_match_color(self, &mut in_match, y);
+                                    self.is_running = false;
+                                }
+                                None => {}
+                            };
+                        }
+                    }
+                    Key::Char('\t') => {
+                        self.input = match in_match.find(&self.input) {
+                            Some((pkind, _)) => { pkind.name }
+                            None => self.input.clone()
+                        };
+                        // setting the pattern matching index back to zero
+                        in_match.index = 0;
+                    }
+                    Key::Up => { if in_match.index > 0 { in_match.index -= 1 } }
+                    Key::Down => { in_match.index += 1 }
+                    Key::Char(char) => {
+                        self.input.push(char)
+                    }
+                    _ => {}
                 }
                 _ => { break }
             }
@@ -1015,83 +1004,85 @@ impl InteractiveEditTerm {
                 Err(_) => { self.cursor_position }
             };
             current_row = &mut self.rows[self.selected_row as usize];
-            let key = parse_terminal();
-
-            match key {
-                Some(Key::Backspace)  => {
-                    if self.cursor_position.0 > current_row.body[0].len() as u16 {
-                        current_row.body[0].remove((self.cursor_position.0 - current_row.spacing[0] as u16 - 1) as usize);
-                        print!("{}", cursor::Left(1));
-                        current_row.select(1, true);
-                        self.cursor_position.0 -= 1
-                    }
-                }
-                Some(Key::Char('\n')) => {
-                    self.is_running = false;
-                    // if any errors are present in the editor set running to true again
-                    for row in &self.rows {
-                        if row.error {
-                            self.is_running = true
+            let event = parse_terminal();
+            match event {
+                Some(Event::Key(key)) => match key {
+                    Key::Backspace  => {
+                        if self.cursor_position.0 > current_row.body[0].len() as u16 {
+                            current_row.body[0].remove((self.cursor_position.0 - current_row.spacing[0] as u16 - 1) as usize);
+                            print!("{}", cursor::Left(1));
+                            current_row.select(1, true);
+                            self.cursor_position.0 -= 1
                         }
                     }
-                }
-                Some(Key::Char('\t')) => {
-                    if current_row.row_index > 4 {
-                        current_row.change_recipe_head(data);
-                        self.print()
+                    Key::Char('\n') => {
+                        self.is_running = false;
+                        // if any errors are present in the editor set running to true again
+                        for row in &self.rows {
+                            if row.error {
+                                self.is_running = true
+                            }
+                        }
                     }
-                }
-                Some(Key::Up)   => {
-                    current_row.deselect();
-                    self.selected_row = (self.selected_row - 1).rem_euclid(self.rows.len() as i16);
-                    let current_row = &mut self.rows[self.selected_row as usize];
-                    current_row.select(1, false);
-                }
-                Some(Key::Down) => {
-                    current_row.deselect();
-                    self.selected_row = (self.selected_row + 1).rem_euclid(self.rows.len() as i16);
-                    let current_row = &mut self.rows[self.selected_row as usize];
-                    current_row.select(1, false);
-                }
-                Some(Key::Left)  => {
-                    // checking whether the cursor can go left
-                    if self.cursor_position.0 > current_row.spacing[0] as u16 {
-                        print!("{}", cursor::Left(1));
-                        current_row.select(1, true);
-                        self.cursor_position.0 -= 1
+                    Key::Char('\t') => {
+                        if current_row.row_index > 4 {
+                            current_row.change_recipe_head(data);
+                            self.print()
+                        }
                     }
-                }
-                Some(Key::Right) => {
-                    // checking whether the cursor can go right
-                    if self.cursor_position.0 < (current_row.spacing[0] + current_row.body.len()) as u16 {
+                    Key::Up   => {
+                        current_row.deselect();
+                        self.selected_row = (self.selected_row - 1).rem_euclid(self.rows.len() as i16);
+                        let current_row = &mut self.rows[self.selected_row as usize];
+                        current_row.select(1, false);
+                    }
+                    Key::Down => {
+                        current_row.deselect();
+                        self.selected_row = (self.selected_row + 1).rem_euclid(self.rows.len() as i16);
+                        let current_row = &mut self.rows[self.selected_row as usize];
+                        current_row.select(1, false);
+                    }
+                    Key::Left  => {
+                        // checking whether the cursor can go left
+                        if self.cursor_position.0 > current_row.spacing[0] as u16 {
+                            print!("{}", cursor::Left(1));
+                            current_row.select(1, true);
+                            self.cursor_position.0 -= 1
+                        }
+                    }
+                    Key::Right => {
+                        // checking whether the cursor can go right
+                        if self.cursor_position.0 < (current_row.spacing[0] + current_row.body.len()) as u16 {
+                            print!("{}", cursor::Right(1));
+                            current_row.select(1, true);
+                            self.cursor_position.0 += 1
+                        }
+                    }
+                    Key::Char(char) => {
+                        current_row.body[0].insert(self.cursor_position.0 as usize - current_row.spacing[0], char);
                         print!("{}", cursor::Right(1));
                         current_row.select(1, true);
                         self.cursor_position.0 += 1
                     }
-                }
-                Some(Key::Char(char)) => {
-                    current_row.body[0].insert(self.cursor_position.0 as usize - current_row.spacing[0], char);
-                    print!("{}", cursor::Right(1));
-                    current_row.select(1, true);
-                    self.cursor_position.0 += 1
-                }
-                Some(Key::Esc) => {
-                    self.escape_pressed = true;
-                    self.is_running = false;
-                }
-                Some(Key::Insert) => {
-                    let row_index = self.rows[self.rows.len() - 1].row_index + 1;
-                    let new_row = EditRow::new(row_index, true, "placeholder".to_string(), vec!["1".to_string()], vec![0, 3], self.column_width.clone());
-                    self.rows.push(new_row.clone());
-                    self.column_width = self.get_column_width();
-                    if self.rows[0].spacing != self.column_width {
-                        for row in &mut self.rows {
-                            row.spacing = self.column_width.clone()
-                        }
+                    Key::Esc => {
+                        self.escape_pressed = true;
+                        self.is_running = false;
                     }
-                    self.print()
+                    Key::Insert => {
+                        let row_index = self.rows[self.rows.len() - 1].row_index + 1;
+                        let new_row = EditRow::new(row_index, true, "placeholder".to_string(), vec!["1".to_string()], vec![0, 3], self.column_width.clone());
+                        self.rows.push(new_row.clone());
+                        self.column_width = self.get_column_width();
+                        if self.rows[0].spacing != self.column_width {
+                            for row in &mut self.rows {
+                                row.spacing = self.column_width.clone()
+                            }
+                        }
+                        self.print()
+                    }
+                    _ => { self.escape_pressed = true; break }
                 }
-                _ => { self.escape_pressed = true; break }
+                _ => {}
             }
         }
         self.rows[self.rows.len() - 1].print(false);
@@ -1118,13 +1109,8 @@ impl InteractiveEditTerm {
             recipe_products.push( RecipePart { kind: ProductKind { name: rec_part_name.head.clone() }, amount: self.rows[index + 4].body[0].parse().unwrap() } )
         }
         println!();
-        return Product {
-            kind: ProductKind { name: self.rows[0].body[0].clone() },
-            time: self.rows[1].body[0].parse().unwrap(),
-            amount: self.rows[2].body[0].parse().unwrap(),
-            machine: self.rows[3].body[0].parse().unwrap(),
-            recipe_products
-        }
+        return Product::new(self.rows[0].body[0].clone(), self.rows[1].body[0].parse().unwrap(), self.rows[2].body[0].parse().unwrap(),
+                            self.rows[3].body[0].parse().unwrap(), recipe_products)
     }
 }
 
