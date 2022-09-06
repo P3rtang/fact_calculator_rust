@@ -33,7 +33,7 @@ impl Command {
                     [token1, token2] => {
                         let node = Node { product_kind: ProductKind { name: token1.clone().text }, amount: token2.text.parse().unwrap() };
                         let tree = Tree::new(node, 0, data, settings);
-                        tree.traverse(None)
+                        tree.traverse(false, None)
                     }
                     [err,..] if err.kind != TokenKind::NewLine => {
                         SyntaxError(err.clone().text, err.loc, format!("expected 2 arguments for calc found {}: {}", self.args.len(), err.text)).show()
@@ -54,7 +54,7 @@ impl Command {
                         };
                         let node = Node { product_kind: ProductKind { name: product }, amount: parse_amount };
                         let mut tree = Tree::new(node, 0, data, settings);
-                        tree.print(None);
+                        tree.start_session();
                     }
                     [..] => {}
                 }
@@ -493,6 +493,7 @@ impl Node {
 struct Tree {
     parent: Node,
     indent: usize,
+    hidden: bool,
     children: Vec<Box<Tree>>,
 }
 
@@ -505,23 +506,28 @@ impl Tree {
             let boxed_sub_tree = Box::new(Tree::new(sub_node, indent + 3, data, settings));
             children.push(boxed_sub_tree)
         }
-        let tree = Tree { parent: node, indent, children };
+        let tree = Tree { parent: node, indent, hidden: false, children };
         return tree
     }
-    fn traverse (&self, depth: Option<u16>) {
+    fn traverse (&self, hide_children: bool, hide_depth: Option<i16>) {
         let mut stdout = stdout().into_raw_mode().unwrap();
         let start_position = stdout.cursor_pos().unwrap().1;
         let indentation = " ".repeat(self.indent as usize);
         println!("{}{}{}>{} {}", Goto(1, start_position), indentation, color::Fg(color::Magenta), color::Fg(color::Reset), self.parent);
-        if let Some(depth) = depth {
-            if depth > 0 {
+        if let Some(depth) = hide_depth {
+            if depth == 0 {
                 for node in &self.children {
-                    node.traverse(Some(depth - 1))
+                    node.traverse(true, hide_depth);
+                }
+            } else {
+                for node in &self.children {
+                    node.traverse(false, Some(depth - 1))
                 }
             }
-        } else {
+        }
+        else {
             for node in &self.children {
-                node.traverse(None)
+                node.traverse(hide_children, None)
             }
         }
     }
@@ -529,8 +535,7 @@ impl Tree {
         let stdin = stdin();
         let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
         stdout.flush().unwrap();
-
-        self.print(None);
+        self.print(false, 0);
 
         for c in stdin.events() {
             let evt = c.unwrap();
@@ -538,8 +543,8 @@ impl Tree {
                 Event::Key(Key::Esc) => break,
                 Event::Mouse(me) => {
                     match me {
-                        MouseEvent::Release(_, _) => {
-                            
+                        MouseEvent::Release(_, y) => {
+                            self.print(true, y as i16)
                         },
                         _ => (),
                     }
@@ -549,13 +554,20 @@ impl Tree {
             stdout.flush().unwrap();
         }
     }
-    fn hide_all(&self) {
-
+    fn hide(&mut self) {
+        self.hidden = false;
+        self.traverse(true, None)
     }
-    fn print(&mut self, depth: Option<u16>) {
-        print!("{}{}", clear::All, Goto(1, 1));
-        stdout().flush().unwrap();
-        self.traverse(depth)
+    fn print(&mut self, do_hide_layer: bool, hide_depth: i16) {
+        if !self.hidden {
+            print!("{}{}", clear::All, Goto(1, 1));
+            stdout().flush().unwrap();
+            if do_hide_layer {
+                self.traverse(true, Some(hide_depth))
+            } else {
+                self.traverse(false, None)
+            }
+        }
     }
     // TODO: make tree output interactive with tabs
     // TODO: add search function to tree to get the accumulated value for a certain product
